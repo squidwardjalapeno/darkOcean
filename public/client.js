@@ -4,8 +4,16 @@ const canvas = document.getElementById('viewport');
 const ctx = canvas.getContext('2d');
 const viewportContainer = document.getElementById('viewport-container');
 
+// Session Persistence
+let myToken = localStorage.getItem('dark_ocean_token');
+if (!myToken) {
+    myToken = `tok_${Math.random().toString(36).substr(2, 9)}_${Date.now().toString(36)}`;
+    localStorage.setItem('dark_ocean_token', myToken);
+}
+
+let savedName = localStorage.getItem('dark_ocean_name') || "";
 let myId = null;
-let myName = "CAPT";
+let myName = savedName || "CAPT";
 let enemyId = null;
 let enemyName = "ENEMY";
 let totalWorldPoints = 1;
@@ -59,7 +67,7 @@ window.addEventListener('resize', resize);
 resize();
 
 // ==========================================
-// 1. KEYBOARD WASD & ARROWS
+// 1. KEYBOARD CONTROLS
 // ==========================================
 const PAN_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'];
 
@@ -79,7 +87,7 @@ window.addEventListener('keyup', (e) => {
 });
 
 // ==========================================
-// 2. LOBBY & PRE-GAME UI
+// 2. SESSION AUTHENTICATION & RECONNECT
 // ==========================================
 const nameModal = document.getElementById('name-modal');
 const lobbyModal = document.getElementById('lobby-modal');
@@ -97,10 +105,94 @@ const slotP1 = document.getElementById('slot-p1');
 const slotP2 = document.getElementById('slot-p2');
 const launchMatchBtn = document.getElementById('launch-match-btn');
 
+if (savedName) {
+    nameInput.value = savedName;
+}
+
+// Handshake immediately upon connecting
+socket.on('connect', () => {
+    socket.emit('authenticate', { token: myToken, name: savedName });
+});
+
+socket.on('authConfirmed', (data) => {
+    myId = data.playerId;
+    if (savedName) {
+        nameModal.classList.add('hidden');
+        lobbyModal.classList.remove('hidden');
+        displayCallsign.innerText = myName;
+        socket.emit('getLobbies');
+    }
+});
+
+// Seamless Reconnection to Active Running Match
+socket.on('gameReconnected', (data) => {
+    nameModal.classList.add('hidden');
+    lobbyModal.classList.add('hidden');
+    tacticalSidebar.classList.remove('hidden');
+    resize();
+
+    myId = data.myId;
+    myName = data.name;
+    SECTOR_SIZE = data.sectorSize;
+    MAP_SECTORS = data.mapSectors;
+    SCOUT_TIME_MS = data.scoutTimeMs;
+    totalWorldPoints = data.totalWorldPoints;
+    scout = data.scout;
+    autoScoutEnabled = data.autoScout;
+
+    const other = data.players.find(p => p.id !== myId);
+    if (other) {
+        enemyId = other.id;
+        enemyName = other.name;
+    }
+
+    document.getElementById('hud-my-name').innerText = myName;
+    document.getElementById('hud-enemy-name').innerText = enemyName;
+
+    discoveredSectors.clear();
+    islandLookup.clear();
+    activeVoyages.clear();
+
+    data.revealedSectors.forEach(sec => {
+        discoveredSectors.add(sec.key);
+        sec.islands.forEach(isle => islandLookup.set(isle.id, isle));
+    });
+
+    if (data.activeVoyages) {
+        data.activeVoyages.forEach(v => activeVoyages.set(v.id, v));
+    }
+
+    const myHome = Array.from(islandLookup.values()).find(i => i.owner === myId);
+    if (myHome) {
+        camera.x = myHome.x;
+        camera.y = myHome.y;
+        selectIsland(myHome);
+    }
+
+    updateHUD();
+    renderScores();
+});
+
+// Opponent connection status indicator
+socket.on('playerConnectionState', (data) => {
+    if (data.playerId === enemyId) {
+        const enemyLabel = document.getElementById('hud-enemy-name');
+        if (data.connected) {
+            enemyLabel.innerText = enemyName;
+            enemyLabel.style.color = "";
+        } else {
+            enemyLabel.innerText = `${enemyName} (OFFLINE)`;
+            enemyLabel.style.color = "#f5b041";
+        }
+    }
+});
+
 submitNameBtn.onclick = () => {
     const val = nameInput.value.trim().slice(0, 4);
     if (!val) return;
-    socket.emit('setPlayerName', val);
+    myName = val;
+    localStorage.setItem('dark_ocean_name', myName);
+    socket.emit('setPlayerName', myName);
 };
 
 nameInput.addEventListener('keydown', (e) => {
@@ -109,6 +201,7 @@ nameInput.addEventListener('keydown', (e) => {
 
 socket.on('nameConfirmed', (name) => {
     myName = name;
+    localStorage.setItem('dark_ocean_name', myName);
     nameModal.classList.add('hidden');
     lobbyModal.classList.remove('hidden');
     displayCallsign.innerText = myName;
@@ -701,7 +794,6 @@ function render(now) {
     const activeSelected = selectedIslandId ? islandLookup.get(selectedIslandId) : null;
     const sourceIsland = dragSourceId ? islandLookup.get(dragSourceId) : activeSelected;
 
-    // 2. Nautical Range Indicator
     if (sourceIsland && sourceIsland.owner === myId) {
         ctx.save();
         ctx.beginPath();
@@ -715,20 +807,16 @@ function render(now) {
         ctx.restore();
     }
 
-    // 3. Draw All Discovered Islands
     for (const [id, isle] of islandLookup) {
         drawIsland(isle);
     }
 
-    // 4. Draw Voyages with Strict Fog of War Culling
     drawVoyagesAndAlerts();
 
-    // 5. Draw Attack Vector
     if (isDraggingAttack && sourceIsland) {
         drawAttackArrow(sourceIsland, dragCurrentPos.x, dragCurrentPos.y);
     }
 
-    // 6. Draw Scout Vessel
     drawScoutVessel();
 
     ctx.restore();
@@ -742,7 +830,6 @@ function render(now) {
     requestAnimationFrame(render);
 }
 
-// Dedicated Island Rendering (Explicit M1 / M2 labels & Golden border for Mines)
 function drawIsland(isle) {
     const isMine = (isle.owner === myId);
     const isEnemy = (isle.owner !== null && isle.owner !== myId);
@@ -753,7 +840,6 @@ function drawIsland(isle) {
     ctx.beginPath();
     ctx.arc(isle.x, isle.y, radius, 0, Math.PI * 2);
 
-    // Mine background tint is golden if unowned
     ctx.fillStyle = isMine 
         ? 'rgba(0, 255, 119, 0.15)' 
         : isEnemy 
@@ -761,7 +847,6 @@ function drawIsland(isle) {
             : (isGoldMine ? 'rgba(245, 176, 65, 0.18)' : 'rgba(25, 40, 55, 0.85)');
     ctx.fill();
 
-    // Unowned gold mines glow golden (#f5b041)
     const themeColor = isMine ? '#00ff77' : (isEnemy ? '#ff3b3b' : (isGoldMine ? '#f5b041' : '#7f93a5'));
     ctx.strokeStyle = themeColor;
     ctx.lineWidth = isMine ? 2.5 : (radius >= 80 ? 3.0 : 1.5);
@@ -792,7 +877,6 @@ function drawIsland(isle) {
 
     ctx.textAlign = 'center';
 
-    // Label Rendering (Explicit M1/M2 for small mining islands)
     if (radius <= 10) {
         ctx.fillStyle = themeColor;
         ctx.font = 'bold 9px "Share Tech Mono", monospace';
@@ -860,7 +944,6 @@ function drawAttackArrow(source, tx, ty) {
     ctx.fillText(`Troops: ${sent} ➔ ${estimatedArrive} (${efficiency}%) | Gold: ${Math.floor(source.gold * sendGoldRatio)}`, tx + 14, ty - 8);
 }
 
-// Strict Fog of War Culling: Never draw enemy fleets moving inside fog
 function drawVoyagesAndAlerts() {
     const now = Date.now();
 
@@ -879,13 +962,10 @@ function drawVoyagesAndAlerts() {
         const curSectorKey = `${Math.floor(curX / SECTOR_SIZE)}_${Math.floor(curY / SECTOR_SIZE)}`;
         const isCurrentPosInFog = !discoveredSectors.has(curSectorKey);
 
-        // FOG OF WAR FILTER:
-        // If an enemy attack is inside uncharted fog and NOT aimed at my island, CULL IT COMPLETELY!
         if (!isMine && !isAttackingMyIsland && isCurrentPosInFog) {
             continue;
         }
 
-        // Radar Alert: Only show if an enemy is attacking MY island
         if (isAttackingMyIsland) {
             ctx.save();
             ctx.beginPath();
@@ -918,7 +998,6 @@ function drawVoyagesAndAlerts() {
             ctx.restore();
         }
 
-        // Trajectory line: Only drawn if origin is in charted waters or it is my own fleet
         const isOriginInFog = !discoveredSectors.has(`${Math.floor(v.startX / SECTOR_SIZE)}_${Math.floor(v.startY / SECTOR_SIZE)}`);
         if (isMine || (!isOriginInFog && !isCurrentPosInFog)) {
             ctx.beginPath();
@@ -931,7 +1010,6 @@ function drawVoyagesAndAlerts() {
             ctx.setLineDash([]);
         }
 
-        // Fleet Marker
         ctx.beginPath();
         ctx.arc(curX, curY, 5, 0, Math.PI * 2);
         ctx.fillStyle = isMine ? '#00ff77' : '#ff3b3b';

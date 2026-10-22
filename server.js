@@ -10,7 +10,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const http = createServer(app);
-const io = new Server(http);
+const io = new Server(http, {
+    cors: { origin: "*", methods: ["GET", "POST"] }
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -55,15 +57,15 @@ function rollIslandLevel(rng) {
     return 1;
 }
 
-const lobbies = new Map();
-const games = new Map();
-const socketToGameId = new Map();
-const socketToLobbyId = new Map();
+// Global Persistence Registries
+const playerSessions = new Map(); // token -> { token, playerId, name, socketId, lobbyId, gameId }
+const lobbies = new Map();        // lobbyId -> lobby
+const games = new Map();          // gameId -> game
 
 class GameSession {
     constructor(id, players) {
         this.id = id;
-        this.players = players;
+        this.players = players; // Array of { id: playerId, name: playerName }
         this.sectors = new Map();
         this.allIslands = new Map();
         this.activeVoyages = new Map();
@@ -87,8 +89,7 @@ class GameSession {
                 const sectorIslands = [];
 
                 for (let i = 0; i < count; i++) {
-                    // 25% mine chance ensures healthy gold reef distributions
-                    const isMine = rng() < 0.10;
+                    const isMine = rng() < 0.12; // 12% Dark Forest Asteroid Field balance
                     const level = rollIslandLevel(rng);
                     const padding = 130;
                     const localX = padding + Math.floor(rng() * (SECTOR_SIZE - padding * 2));
@@ -151,7 +152,6 @@ class GameSession {
             }
         }
 
-        // Randomize player spawns with fair spacing (>= 5 sectors apart)
         let spawnA, spawnB, dist;
         do {
             spawnA = { sx: Math.floor(Math.random() * MAP_SECTORS), sy: Math.floor(Math.random() * MAP_SECTORS) };
@@ -167,7 +167,6 @@ class GameSession {
             const sIslands = this.sectors.get(secKey);
             const homeIsle = sIslands[0];
 
-            // Always configure starter home as a pure Level 2 NORMAL island
             homeIsle.owner = p.id;
             homeIsle.type = 'NORMAL';
             homeIsle.level = 2;
@@ -201,13 +200,13 @@ class GameSession {
 
     start() {
         this.players.forEach(p => {
-            socketToGameId.set(p.id, this.id);
             const pState = this.playerStates.get(p.id);
             const revealed = Array.from(pState.discoveredSectors).map(key => {
                 const [sx, sy] = key.split('_').map(Number);
                 return { key, sx, sy, islands: this.sectors.get(key) };
             });
 
+            // Target the individual player room (keyed by playerId)
             io.to(p.id).emit('gameStarted', {
                 gameId: this.id,
                 myId: p.id,
@@ -242,6 +241,13 @@ class GameSession {
                 this.gameOver = true;
                 this.winner = { id: p.id, name: p.name, score, pct: pct.toFixed(1) };
                 io.to(this.id).emit('gameOver', this.winner);
+
+                // Release game sessions for clean future lobbies
+                this.players.forEach(pl => {
+                    for (const [tok, sess] of playerSessions) {
+                        if (sess.playerId === pl.id) sess.gameId = null;
+                    }
+                });
                 break;
             }
         }
@@ -282,12 +288,88 @@ function findNextAutoScoutSector(playerState) {
     return candidateSectors[0];
 }
 
+// Socket Connection Lifecycle & Session Authentication
 io.on('connection', (socket) => {
-    let playerName = "CAPT";
+    let playerSession = null;
+
+    socket.on('authenticate', ({ token, name }) => {
+        const cleanName = (name || "CAPT").slice(0, 4).toUpperCase();
+        const safeToken = token || `tok_${Math.random().toString(36).substr(2, 9)}`;
+
+        if (playerSessions.has(safeToken)) {
+            playerSession = playerSessions.get(safeToken);
+            playerSession.socketId = socket.id;
+            if (name) playerSession.name = cleanName;
+        } else {
+            const playerId = `usr_${safeToken.slice(-6)}`;
+            playerSession = {
+                token: safeToken,
+                playerId,
+                name: cleanName,
+                socketId: socket.id,
+                lobbyId: null,
+                gameId: null
+            };
+            playerSessions.set(safeToken, playerSession);
+        }
+
+        socket.data.token = safeToken;
+        socket.data.playerId = playerSession.playerId;
+
+        // Join individual room named after playerId for resilient targeted messages
+        socket.join(playerSession.playerId);
+
+        // Check if player has an active running game to resume
+        if (playerSession.gameId && games.has(playerSession.gameId)) {
+            const game = games.get(playerSession.gameId);
+
+            if (!game.gameOver) {
+                socket.join(game.id);
+
+                const pState = game.playerStates.get(playerSession.playerId);
+                const revealed = Array.from(pState.discoveredSectors).map(key => {
+                    const [sx, sy] = key.split('_').map(Number);
+                    return { key, sx, sy, islands: game.sectors.get(key) };
+                });
+
+                // Send immediate snapshot restoration
+                socket.emit('gameReconnected', {
+                    token: safeToken,
+                    gameId: game.id,
+                    myId: playerSession.playerId,
+                    name: playerSession.name,
+                    sectorSize: SECTOR_SIZE,
+                    mapSectors: MAP_SECTORS,
+                    scoutTimeMs: SCOUT_TIME_MS,
+                    players: game.players.map(pl => ({ id: pl.id, name: pl.name })),
+                    revealedSectors: revealed,
+                    scout: pState.scout,
+                    autoScout: pState.autoScout,
+                    totalWorldPoints: game.totalWorldPoints,
+                    activeVoyages: Array.from(game.activeVoyages.values())
+                });
+
+                // Notify opponent of return
+                io.to(game.id).emit('playerConnectionState', {
+                    playerId: playerSession.playerId,
+                    connected: true
+                });
+                return;
+            }
+        }
+
+        // Otherwise confirm normal authentication
+        socket.emit('authConfirmed', {
+            token: safeToken,
+            name: playerSession.name,
+            playerId: playerSession.playerId
+        });
+    });
 
     socket.on('setPlayerName', (name) => {
-        playerName = (name || "CAPT").slice(0, 4).toUpperCase();
-        socket.emit('nameConfirmed', playerName);
+        if (!playerSession) return;
+        playerSession.name = (name || "CAPT").slice(0, 4).toUpperCase();
+        socket.emit('nameConfirmed', playerSession.name);
     });
 
     socket.on('getLobbies', () => {
@@ -305,20 +387,23 @@ io.on('connection', (socket) => {
     });
 
     socket.on('createLobby', () => {
+        if (!playerSession) return;
+
         const lobbyId = `LOBBY_${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
         const lobby = {
             id: lobbyId,
-            hostId: socket.id,
-            players: [{ id: socket.id, name: playerName }],
+            hostId: playerSession.playerId,
+            players: [{ id: playerSession.playerId, name: playerSession.name }],
             started: false
         };
+
         lobbies.set(lobbyId, lobby);
-        socketToLobbyId.set(socket.id, lobbyId);
+        playerSession.lobbyId = lobbyId;
         socket.join(lobbyId);
 
         socket.emit('lobbyState', {
             lobbyId,
-            host: playerName,
+            host: playerSession.name,
             isHost: true,
             players: lobby.players.map(p => p.name)
         });
@@ -326,6 +411,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('joinLobby', (lobbyId) => {
+        if (!playerSession) return;
         const lobby = lobbies.get(lobbyId);
 
         if (!lobby || lobby.started) {
@@ -333,7 +419,7 @@ io.on('connection', (socket) => {
             return;
         }
 
-        if (lobby.players.some(p => p.id === socket.id)) {
+        if (lobby.players.some(p => p.id === playerSession.playerId)) {
             socket.emit('lobbyError', 'You are already docked in this sector.');
             return;
         }
@@ -343,8 +429,8 @@ io.on('connection', (socket) => {
             return;
         }
 
-        lobby.players.push({ id: socket.id, name: playerName });
-        socketToLobbyId.set(socket.id, lobbyId);
+        lobby.players.push({ id: playerSession.playerId, name: playerSession.name });
+        playerSession.lobbyId = lobbyId;
         socket.join(lobbyId);
 
         io.to(lobbyId).emit('lobbyState', {
@@ -358,10 +444,8 @@ io.on('connection', (socket) => {
     });
 
     socket.on('requestStartGame', () => {
-        const lobbyId = socketToLobbyId.get(socket.id);
-        if (!lobbyId) return;
-
-        const lobby = lobbies.get(lobbyId);
+        if (!playerSession || !playerSession.lobbyId) return;
+        const lobby = lobbies.get(playerSession.lobbyId);
         if (!lobby) return;
 
         if (lobby.players.length < 2) {
@@ -372,23 +456,31 @@ io.on('connection', (socket) => {
         if (lobby.started) return;
         lobby.started = true;
 
-        const game = new GameSession(lobbyId, lobby.players);
-        games.set(lobbyId, game);
+        const game = new GameSession(lobby.id, lobby.players);
+        games.set(lobby.id, game);
+
+        // Bind players to game
+        lobby.players.forEach(p => {
+            for (const [tok, sess] of playerSessions) {
+                if (sess.playerId === p.id) {
+                    sess.gameId = lobby.id;
+                    sess.lobbyId = null;
+                }
+            }
+        });
 
         io.emit('lobbyUpdated');
         game.start();
     });
 
     socket.on('sendVoyage', (data) => {
-        const gameId = socketToGameId.get(socket.id);
-        if (!gameId) return;
-
-        const game = games.get(gameId);
+        if (!playerSession || !playerSession.gameId) return;
+        const game = games.get(playerSession.gameId);
         if (!game || game.gameOver) return;
 
         const from = game.allIslands.get(data.fromId);
         const to = game.allIslands.get(data.toId);
-        if (!from || !to || from.owner !== socket.id || from.id === to.id) return;
+        if (!from || !to || from.owner !== playerSession.playerId || from.id === to.id) return;
 
         const ratio = Math.max(0.1, Math.min(0.95, data.percentage || 0.5));
         const troopsSent = Math.floor(from.population * ratio);
@@ -400,7 +492,7 @@ io.on('connection', (socket) => {
         from.population -= troopsSent;
         from.gold -= goldSent;
 
-        io.to(gameId).emit('islandUpdated', {
+        io.to(game.id).emit('islandUpdated', {
             id: from.id,
             population: from.population,
             gold: from.gold,
@@ -415,8 +507,8 @@ io.on('connection', (socket) => {
         const voyageId = `v_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
         const voyage = {
             id: voyageId,
-            owner: socket.id,
-            playerName: playerName,
+            owner: playerSession.playerId,
+            playerName: playerSession.name,
             fromId: from.id,
             toId: to.id,
             targetOwner: to.owner,
@@ -434,17 +526,15 @@ io.on('connection', (socket) => {
         };
 
         game.activeVoyages.set(voyageId, voyage);
-        io.to(gameId).emit('voyageLaunched', voyage);
+        io.to(game.id).emit('voyageLaunched', voyage);
     });
 
     socket.on('dispatchScout', (target) => {
-        const gameId = socketToGameId.get(socket.id);
-        if (!gameId) return;
-
-        const game = games.get(gameId);
+        if (!playerSession || !playerSession.gameId) return;
+        const game = games.get(playerSession.gameId);
         if (!game || game.gameOver) return;
 
-        const pState = game.playerStates.get(socket.id);
+        const pState = game.playerStates.get(playerSession.playerId);
         if (!pState || pState.scout.state === 'CHARTING') return;
 
         const { sx, sy } = target;
@@ -455,32 +545,28 @@ io.on('connection', (socket) => {
         pState.scout.startTime = Date.now();
         pState.scout.duration = SCOUT_TIME_MS;
 
-        socket.emit('scoutUpdate', pState.scout);
+        io.to(playerSession.playerId).emit('scoutUpdate', pState.scout);
     });
 
     socket.on('toggleAutoScout', (enabled) => {
-        const gameId = socketToGameId.get(socket.id);
-        if (!gameId) return;
-
-        const game = games.get(gameId);
+        if (!playerSession || !playerSession.gameId) return;
+        const game = games.get(playerSession.gameId);
         if (!game) return;
 
-        const pState = game.playerStates.get(socket.id);
+        const pState = game.playerStates.get(playerSession.playerId);
         if (pState) {
             pState.autoScout = enabled;
-            socket.emit('autoScoutState', pState.autoScout);
+            io.to(playerSession.playerId).emit('autoScoutState', pState.autoScout);
         }
     });
 
     socket.on('upgradeIsland', (data) => {
-        const gameId = socketToGameId.get(socket.id);
-        if (!gameId) return;
-
-        const game = games.get(gameId);
+        if (!playerSession || !playerSession.gameId) return;
+        const game = games.get(playerSession.gameId);
         if (!game || game.gameOver) return;
 
         const isle = game.allIslands.get(data.islandId);
-        if (!isle || isle.owner !== socket.id) return;
+        if (!isle || isle.owner !== playerSession.playerId) return;
 
         const upgradeType = data.type;
         const currentLvl = isle.upgrades[upgradeType] || 0;
@@ -496,7 +582,7 @@ io.on('connection', (socket) => {
         if (upgradeType === 'range') isle.range = Math.round(isle.range * 1.20);
         if (upgradeType === 'defense') isle.defense = Number((isle.defense + 0.25).toFixed(2));
 
-        io.to(gameId).emit('islandUpgraded', {
+        io.to(game.id).emit('islandUpgraded', {
             id: isle.id,
             gold: isle.gold,
             speed: isle.speed,
@@ -507,27 +593,37 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        const lobbyId = socketToLobbyId.get(socket.id);
-        if (lobbyId && lobbies.has(lobbyId)) {
-            const lobby = lobbies.get(lobbyId);
-            lobby.players = lobby.players.filter(p => p.id !== socket.id);
+        if (!playerSession) return;
+
+        // If in an unstarted lobby, clean up
+        if (playerSession.lobbyId && lobbies.has(playerSession.lobbyId)) {
+            const lobby = lobbies.get(playerSession.lobbyId);
+            lobby.players = lobby.players.filter(p => p.id !== playerSession.playerId);
 
             if (lobby.players.length === 0) {
-                lobbies.delete(lobbyId);
+                lobbies.delete(playerSession.lobbyId);
             } else {
-                io.to(lobbyId).emit('lobbyState', {
+                io.to(playerSession.lobbyId).emit('lobbyState', {
                     lobbyId: lobby.id,
                     host: lobby.players[0].name,
                     players: lobby.players.map(p => p.name)
                 });
             }
+            playerSession.lobbyId = null;
             io.emit('lobbyUpdated');
         }
-        socketToGameId.delete(socket.id);
-        socketToLobbyId.delete(socket.id);
+
+        // If in an active game, keep the match running and notify opponent
+        if (playerSession.gameId && games.has(playerSession.gameId)) {
+            io.to(playerSession.gameId).emit('playerConnectionState', {
+                playerId: playerSession.playerId,
+                connected: false
+            });
+        }
     });
 });
 
+// 20Hz Tick: Scouts and Voyages
 setInterval(() => {
     const now = Date.now();
 
@@ -577,6 +673,7 @@ setInterval(() => {
     }
 }, 50);
 
+// 1Hz Tick: S-Curve Population Growth & Gold
 setInterval(() => {
     for (const [gId, game] of games) {
         if (game.gameOver) continue;
@@ -629,6 +726,6 @@ function resolveVoyageArrival(game, v) {
 }
 
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
+http.listen(PORT, '0.0.0.0', () => {
     console.log(`🌊 Dark Ocean Server running on port ${PORT}`);
 });
