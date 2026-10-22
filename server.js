@@ -20,7 +20,6 @@ const SECTOR_SIZE = 800;
 const MAP_SECTORS = 10;
 const SCOUT_TIME_MS = 30000;
 
-// server.js (Top of file, add boot timestamp)
 const SERVER_BOOT_TIME = Date.now();
 
 const ISLAND_TIERS = {
@@ -60,6 +59,15 @@ function rollIslandLevel(rng) {
     return 1;
 }
 
+// Formats island payload for client consumption with clean integers
+function formatIslandForClient(isle) {
+    return {
+        ...isle,
+        population: Math.floor(isle.population),
+        gold: Math.floor(isle.gold)
+    };
+}
+
 // Global Persistence Registries
 const playerSessions = new Map(); // token -> { token, playerId, name, socketId, lobbyId, gameId }
 const lobbies = new Map();        // lobbyId -> lobby
@@ -92,7 +100,7 @@ class GameSession {
                 const sectorIslands = [];
 
                 for (let i = 0; i < count; i++) {
-                    const isMine = rng() < 0.12; // 12% Dark Forest Asteroid Field balance
+                    const isMine = rng() < 0.12;
                     const level = rollIslandLevel(rng);
                     const padding = 130;
                     const localX = padding + Math.floor(rng() * (SECTOR_SIZE - padding * 2));
@@ -206,10 +214,10 @@ class GameSession {
             const pState = this.playerStates.get(p.id);
             const revealed = Array.from(pState.discoveredSectors).map(key => {
                 const [sx, sy] = key.split('_').map(Number);
-                return { key, sx, sy, islands: this.sectors.get(key) };
+                const isles = this.sectors.get(key) || [];
+                return { key, sx, sy, islands: isles.map(formatIslandForClient) };
             });
 
-            // Target the individual player room (keyed by playerId)
             io.to(p.id).emit('gameStarted', {
                 gameId: this.id,
                 myId: p.id,
@@ -245,7 +253,6 @@ class GameSession {
                 this.winner = { id: p.id, name: p.name, score, pct: pct.toFixed(1) };
                 io.to(this.id).emit('gameOver', this.winner);
 
-                // Release game sessions for clean future lobbies
                 this.players.forEach(pl => {
                     for (const [tok, sess] of playerSessions) {
                         if (sess.playerId === pl.id) sess.gameId = null;
@@ -296,7 +303,6 @@ io.on('connection', (socket) => {
     let playerSession = null;
 
     socket.on('authenticate', ({ token, name, bootTime }) => {
-        // If the client's token or boot time is from a previous server restart, force reset!
         const isStaleBoot = !bootTime || bootTime !== SERVER_BOOT_TIME;
         const safeToken = (!isStaleBoot && token) ? token : `tok_${Math.random().toString(36).substr(2, 9)}_${SERVER_BOOT_TIME}`;
         const cleanName = (name && !isStaleBoot) ? name.slice(0, 4).toUpperCase() : null;
@@ -306,12 +312,11 @@ io.on('connection', (socket) => {
             playerSession.socketId = socket.id;
             if (cleanName) playerSession.name = cleanName;
         } else {
-            // New or stale session: Do NOT assign a name yet, force them to input one!
             const playerId = `usr_${Math.random().toString(36).substr(2, 6)}`;
             playerSession = {
                 token: safeToken,
                 playerId,
-                name: cleanName, // null if fresh boot
+                name: cleanName,
                 socketId: socket.id,
                 lobbyId: null,
                 gameId: null
@@ -323,7 +328,6 @@ io.on('connection', (socket) => {
         socket.data.playerId = playerSession.playerId;
         socket.join(playerSession.playerId);
 
-        // If they have a valid active game on this current boot, reconnect them
         if (!isStaleBoot && playerSession.gameId && games.has(playerSession.gameId)) {
             const game = games.get(playerSession.gameId);
             if (!game.gameOver) {
@@ -331,7 +335,8 @@ io.on('connection', (socket) => {
                 const pState = game.playerStates.get(playerSession.playerId);
                 const revealed = Array.from(pState.discoveredSectors).map(key => {
                     const [sx, sy] = key.split('_').map(Number);
-                    return { key, sx, sy, islands: game.sectors.get(key) };
+                    const isles = game.sectors.get(key) || [];
+                    return { key, sx, sy, islands: isles.map(formatIslandForClient) };
                 });
 
                 socket.emit('gameReconnected', {
@@ -353,7 +358,6 @@ io.on('connection', (socket) => {
             }
         }
 
-        // Send back server boot time and whether a valid name already exists
         socket.emit('authConfirmed', {
             token: safeToken,
             serverBootTime: SERVER_BOOT_TIME,
@@ -362,7 +366,6 @@ io.on('connection', (socket) => {
             playerId: playerSession.playerId
         });
     });
-
 
     socket.on('setPlayerName', (name) => {
         if (!playerSession) return;
@@ -457,7 +460,6 @@ io.on('connection', (socket) => {
         const game = new GameSession(lobby.id, lobby.players);
         games.set(lobby.id, game);
 
-        // Bind players to game
         lobby.players.forEach(p => {
             for (const [tok, sess] of playerSessions) {
                 if (sess.playerId === p.id) {
@@ -492,8 +494,8 @@ io.on('connection', (socket) => {
 
         io.to(game.id).emit('islandUpdated', {
             id: from.id,
-            population: from.population,
-            gold: from.gold,
+            population: Math.floor(from.population),
+            gold: Math.floor(from.gold),
             owner: from.owner
         });
 
@@ -559,44 +561,41 @@ io.on('connection', (socket) => {
     });
 
     socket.on('upgradeIsland', (data) => {
-    const gameId = socketToGameId.get(socket.id);
-    if (!gameId) return;
+        if (!playerSession || !playerSession.gameId) return;
+        const game = games.get(playerSession.gameId);
+        if (!game || game.gameOver) return;
 
-    const game = games.get(gameId);
-    if (!game || game.gameOver) return;
+        const isle = game.allIslands.get(data.islandId);
+        if (!isle || isle.owner !== playerSession.playerId) return;
 
-    const isle = game.allIslands.get(data.islandId);
-    if (!isle || isle.owner !== socket.id) return;
+        const upgradeType = data.type; // 'speed', 'range', 'defense'
+        const currentLvl = isle.upgrades[upgradeType] || 0;
+        if (currentLvl >= 5) return;
 
-    const upgradeType = data.type; // 'speed', 'range', 'defense'
-    const currentLvl = isle.upgrades[upgradeType] || 0;
-    if (currentLvl >= 5) return;
+        // 2x exponential curve on stat level AND 2x exponential curve on island tier level (2^(islandLevel - 1))
+        const cost = Math.floor(50 * Math.pow(2, currentLvl) * Math.pow(2, isle.level - 1));
+        if (isle.gold < cost) return;
 
-    // 2x exponential curve on stat level AND 2x exponential curve on island tier level (2^(islandLevel - 1))
-    const cost = Math.floor(50 * Math.pow(2, currentLvl) * Math.pow(2, isle.level - 1));
-    if (isle.gold < cost) return;
+        isle.gold -= cost;
+        isle.upgrades[upgradeType] = currentLvl + 1;
 
-    isle.gold -= cost;
-    isle.upgrades[upgradeType] = currentLvl + 1;
+        if (upgradeType === 'speed') isle.speed = Math.round(isle.speed * 1.15);
+        if (upgradeType === 'range') isle.range = Math.round(isle.range * 1.20);
+        if (upgradeType === 'defense') isle.defense = Number((isle.defense + 0.25).toFixed(2));
 
-    if (upgradeType === 'speed') isle.speed = Math.round(isle.speed * 1.15);
-    if (upgradeType === 'range') isle.range = Math.round(isle.range * 1.20);
-    if (upgradeType === 'defense') isle.defense = Number((isle.defense + 0.25).toFixed(2));
-
-    io.to(gameId).emit('islandUpgraded', {
-        id: isle.id,
-        gold: isle.gold,
-        speed: isle.speed,
-        range: isle.range,
-        defense: isle.defense,
-        upgrades: isle.upgrades
+        io.to(game.id).emit('islandUpgraded', {
+            id: isle.id,
+            gold: Math.floor(isle.gold),
+            speed: isle.speed,
+            range: isle.range,
+            defense: isle.defense,
+            upgrades: isle.upgrades
+        });
     });
-});
 
     socket.on('disconnect', () => {
         if (!playerSession) return;
 
-        // If in an unstarted lobby, clean up
         if (playerSession.lobbyId && lobbies.has(playerSession.lobbyId)) {
             const lobby = lobbies.get(playerSession.lobbyId);
             lobby.players = lobby.players.filter(p => p.id !== playerSession.playerId);
@@ -614,7 +613,6 @@ io.on('connection', (socket) => {
             io.emit('lobbyUpdated');
         }
 
-        // If in an active game, keep the match running and notify opponent
         if (playerSession.gameId && games.has(playerSession.gameId)) {
             io.to(playerSession.gameId).emit('playerConnectionState', {
                 playerId: playerSession.playerId,
@@ -646,7 +644,12 @@ setInterval(() => {
                 scout.targetSector = null;
 
                 io.to(playerId).emit('sectorCharted', {
-                    sector: { key: sectorKey, sx, sy, islands: discovered },
+                    sector: { 
+                        key: sectorKey, 
+                        sx, 
+                        sy, 
+                        islands: discovered.map(formatIslandForClient) 
+                    },
                     scout
                 });
             }
@@ -674,27 +677,32 @@ setInterval(() => {
     }
 }, 50);
 
-// 1Hz Tick: S-Curve Population Growth & Gold
+// 1Hz Tick: Continuous S-Curve Population Growth & Gold
 setInterval(() => {
     for (const [gId, game] of games) {
         if (game.gameOver) continue;
 
         for (const [id, isle] of game.allIslands) {
             if (isle.owner) {
-                const ratio = Math.max(0.02, isle.population / isle.maxPop);
+                const ratio = Math.max(0.01, isle.population / isle.maxPop);
                 if (ratio < 1.0) {
-                    const logisticFactor = Math.max(0.12, 4 * ratio * (1 - ratio));
-                    const popGain = Math.max(1, Math.round(isle.growth * logisticFactor));
-                    isle.population = Math.min(isle.maxPop, isle.population + popGain);
+                    // True logistic factor: peaks at 1.0 (50% capacity), drops near 0% and 100%
+                    const logisticFactor = Math.max(0.08, 4 * ratio * (1 - ratio));
+                    
+                    // Continuous floating-point accumulation (no integer rounding or clamping to 1)
+                    const popGain = isle.growth * logisticFactor;
+                    isle.population = Math.min(isle.maxPop, Number((isle.population + popGain).toFixed(3)));
                 }
             }
 
             if (isle.goldGrowth > 0 && isle.gold < isle.maxGold) {
-                isle.gold = Math.min(isle.maxGold, isle.gold + isle.goldGrowth);
+                isle.gold = Math.min(isle.maxGold, Number((isle.gold + isle.goldGrowth).toFixed(2)));
             }
         }
 
-        io.to(gId).emit('islandsSync', Array.from(game.allIslands.values()));
+        // Send whole clean numbers to clients
+        const syncedIslands = Array.from(game.allIslands.values()).map(formatIslandForClient);
+        io.to(gId).emit('islandsSync', syncedIslands);
         game.checkWinCondition();
     }
 }, 1000);
@@ -711,7 +719,7 @@ function resolveVoyageArrival(game, v) {
 
         if (effectiveDamage >= target.population) {
             target.owner = v.owner;
-            target.population = Math.max(1, effectiveDamage - target.population);
+            target.population = Math.max(1, Math.floor(effectiveDamage - target.population));
             target.gold = Math.min(target.maxGold, target.gold + (v.goldPayload || 0));
         } else {
             target.population -= effectiveDamage;
@@ -720,8 +728,8 @@ function resolveVoyageArrival(game, v) {
 
     io.to(game.id).emit('islandUpdated', {
         id: target.id,
-        population: target.population,
-        gold: target.gold,
+        population: Math.floor(target.population),
+        gold: Math.floor(target.gold),
         owner: target.owner
     });
 }

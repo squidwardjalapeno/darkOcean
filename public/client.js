@@ -701,8 +701,8 @@ function showArmory(isle) {
 function refreshArmory(isle) {
     document.getElementById('inspector-name').innerText = isle.name;
     document.getElementById('stat-type').innerText = isle.type;
-    document.getElementById('stat-pop').innerText = `${isle.population} / ${isle.maxPop}`;
-    document.getElementById('stat-gold').innerText = `🪙 ${isle.gold} / ${isle.maxGold}`;
+    document.getElementById('stat-pop').innerText = `${Math.floor(isle.population)} / ${isle.maxPop}`;
+    document.getElementById('stat-gold').innerText = `🪙 ${Math.floor(isle.gold)} / ${isle.maxGold}`;
     document.getElementById('stat-points').innerText = `${isle.points} pts`;
 
     const up = isle.upgrades || { speed: 0, range: 0, defense: 0 };
@@ -890,7 +890,7 @@ function drawIsland(isle) {
         ctx.font = 'bold 9px "Share Tech Mono", monospace';
         const tag = isGoldMine ? `🪙M${isle.level}` : `T${isle.level}`;
         ctx.fillText(tag, isle.x, isle.y - radius - 5);
-        ctx.fillText(`${isle.population}`, isle.x, isle.y + radius + 11);
+        ctx.fillText(`${Math.floor(isle.population)}`, isle.x, isle.y + radius + 11);
     } else {
         if (isle.gold > 0) {
             ctx.fillStyle = '#f5b041';
@@ -905,7 +905,7 @@ function drawIsland(isle) {
         ctx.fillText(label, isle.x, isle.y + badgeSize * 0.35);
 
         ctx.font = 'bold 11px "Share Tech Mono", monospace';
-        ctx.fillText(`👥${isle.population}/${isle.maxPop}`, isle.x, isle.y + radius + 14);
+        ctx.fillText(`👥${Math.floor(isle.population)}/${isle.maxPop}`, isle.x, isle.y + radius + 14);
     }
 
     ctx.textAlign = 'left';
