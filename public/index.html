@@ -41,13 +41,7 @@
             user-select: none;
         }
 
-        #app-root {
-            display: flex;
-            width: 100vw;
-            height: 100vh;
-            overflow: hidden;
-            position: relative;
-        }
+        
 
         
 
@@ -217,6 +211,15 @@
         /* ==========================================
            1. LEFT TACTICAL SIDEBAR (Scrollable on Mobile)
            ========================================== */
+         #app-root {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+            flex-direction: row; /* Default: Side-by-side for desktop & landscape mobile */
+        }
+
         #tactical-sidebar {
             width: 280px;
             min-width: 280px;
@@ -229,21 +232,29 @@
             padding: 10px;
             gap: 8px;
             z-index: 50;
-            overflow-y: auto; /* ENABLES SMOOTH TOUCH SCROLLING */
-            -webkit-overflow-scrolling: touch; /* Momentum scrolling for iOS */
+            overflow-y: auto; /* ENABLES SMOOTH TOUCH & MOUSE SCROLLING */
+            -webkit-overflow-scrolling: touch; /* Momentum scrolling for mobile */
             box-shadow: 6px 0 25px rgba(0, 0, 0, 0.8);
         }
 
-        /* Allow the bottom dock to wrap content cleanly when scrolled */
+        #viewport-container {
+            flex: 1;
+            height: 100vh;
+            position: relative;
+            overflow: hidden;
+            background-color: var(--bg-base);
+        }
+
+        /* Allow bottom dock to expand gracefully when scrolled */
         #bottom-dock {
-            min-height: 180px; /* Ensures armory cards never squash */
+            min-height: 200px; 
             background: rgba(5, 16, 29, 0.85);
             border: 1px solid var(--border-bright);
             padding: 8px;
             border-radius: 2px;
             display: flex;
             flex-direction: column;
-            margin-bottom: 10px;
+            margin-bottom: 15px;
         }
 
         #standby-view {
@@ -423,14 +434,6 @@
             color: var(--neon-green);
         }
 
-        #viewport-container {
-            flex: 1;
-            height: 100vh;
-            position: relative;
-            overflow: hidden;
-            background-color: var(--bg-base);
-        }
-
         canvas#viewport { display: block; width: 100%; height: 100%; }
 
         .modal-layer {
@@ -534,24 +537,26 @@
 
         .hidden { display: none !important; }
 
-        /* Responsive Mobile Layout adjustments */
-        @media (max-width: 768px) {
+        /* ==========================================
+           PORTRAIT PHONE OPTIMIZATION (Tall screens)
+           ========================================== */
+        @media (max-width: 768px) and (orientation: portrait) {
             #app-root {
-                flex-direction: column-reverse; /* Puts ocean map on top, collapsible sidebar at bottom or vice versa */
+                flex-direction: column-reverse; /* Stacked only when phone is upright */
             }
 
             #tactical-sidebar {
                 width: 100vw;
                 min-width: 100vw;
                 max-width: 100vw;
-                height: 38vh; /* Takes up bottom 38% of phone screen */
+                height: 40vh; /* Bottom 40% for controls */
                 border-right: none;
                 border-top: 2px solid var(--border-bright);
             }
 
             #viewport-container {
                 width: 100vw;
-                height: 62vh; /* Takes up top 62% of phone screen */
+                height: 60vh; /* Top 60% for ocean map */
             }
         }
     </style>
