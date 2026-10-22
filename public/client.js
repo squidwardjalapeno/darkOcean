@@ -1,11 +1,12 @@
 // public/client.js
-// public/client.js (Replace top session setup and auth listeners)
 const socket = io();
 const canvas = document.getElementById('viewport');
 const ctx = canvas.getContext('2d');
 const viewportContainer = document.getElementById('viewport-container');
 
-// Session Persistence
+// ==========================================
+// 1. SESSION PERSISTENCE & GLOBAL STATE
+// ==========================================
 let myToken = localStorage.getItem('dark_ocean_token');
 if (!myToken) {
     myToken = `tok_${Math.random().toString(36).substr(2, 9)}_${Date.now().toString(36)}`;
@@ -27,9 +28,7 @@ const PAN_SPEED = 700;
 const keysDown = new Set();
 let lastTime = performance.now();
 
-// --- ADD THESE KEYBOARD LISTENERS HERE ---
 window.addEventListener('keydown', (e) => {
-    // Prevent default window scrolling behavior when pressing arrows or spacebar
     if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
         e.preventDefault();
     }
@@ -39,9 +38,6 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
     keysDown.delete(e.code);
 });
-// ----------------------------------------
-
-
 
 // Game State
 const discoveredSectors = new Set();
@@ -83,7 +79,7 @@ window.addEventListener('resize', resize);
 resize();
 
 // ==========================================
-// 1. AUTHENTICATION & RENDER RESTART SYNC
+// 2. AUTHENTICATION & RECONNECTION
 // ==========================================
 const nameModal = document.getElementById('name-modal');
 const lobbyModal = document.getElementById('lobby-modal');
@@ -102,28 +98,27 @@ const slotP2 = document.getElementById('slot-p2');
 const launchMatchBtn = document.getElementById('launch-match-btn');
 
 socket.on('connect', () => {
-    const storedBootTime = localStorage.getItem('dark_ocean_boot_time');
     const storedName = localStorage.getItem('dark_ocean_name');
     socket.emit('authenticate', { 
         token: myToken, 
-        name: storedName, 
-        bootTime: storedBootTime ? Number(storedBootTime) : null 
+        name: storedName
     });
 });
 
 socket.on('authConfirmed', (data) => {
     myId = data.playerId;
     
-    // Save current server boot time
-    localStorage.setItem('dark_ocean_boot_time', data.serverBootTime);
+    if (data.token) {
+        myToken = data.token;
+        localStorage.setItem('dark_ocean_token', myToken);
+    }
 
-    // If server wiped its memory (Render restart), force them to re-enter name!
     if (!data.hasName) {
-        localStorage.removeItem('dark_ocean_name');
         nameModal.classList.remove('hidden');
         lobbyModal.classList.add('hidden');
     } else {
         myName = data.name;
+        localStorage.setItem('dark_ocean_name', myName);
         nameModal.classList.add('hidden');
         lobbyModal.classList.remove('hidden');
         displayCallsign.innerText = myName;
@@ -133,8 +128,14 @@ socket.on('authConfirmed', (data) => {
 
 // Seamless Reconnection to Active Running Match
 socket.on('gameReconnected', (data) => {
+    if (data.token) {
+        myToken = data.token;
+        localStorage.setItem('dark_ocean_token', myToken);
+    }
+
     nameModal.classList.add('hidden');
     lobbyModal.classList.add('hidden');
+    document.getElementById('game-over-modal').classList.add('hidden');
     tacticalSidebar.classList.remove('hidden');
     resize();
 
@@ -169,7 +170,7 @@ socket.on('gameReconnected', (data) => {
         data.activeVoyages.forEach(v => activeVoyages.set(v.id, v));
     }
 
-    const myHome = Array.from(islandLookup.values()).find(i => i.owner === myId);
+    const myHome = Array.from(islandLookup.values()).find(i => i.owner === myId) || Array.from(islandLookup.values())[0];
     if (myHome) {
         camera.x = myHome.x;
         camera.y = myHome.y;
@@ -710,7 +711,6 @@ function refreshArmory(isle) {
     document.getElementById('up-range-val').innerText = `${isle.range} (Lv ${up.range})`;
     document.getElementById('up-defense-val').innerText = `${isle.defense} (Lv ${up.defense})`;
 
-    // 2x exponential curve on stat level AND 2x exponential curve on island tier level
     const speedCost = Math.floor(50 * Math.pow(2, up.speed) * Math.pow(2, isle.level - 1));
     const rangeCost = Math.floor(50 * Math.pow(2, up.range) * Math.pow(2, isle.level - 1));
     const defCost = Math.floor(50 * Math.pow(2, up.defense) * Math.pow(2, isle.level - 1));
@@ -760,7 +760,7 @@ function render(now) {
     ctx.scale(camera.zoom, camera.zoom);
     ctx.translate(-camera.x, -camera.y);
 
-    // 1. Sectors
+    // 1. Sectors Grid & Fog of War
     for (let sx = 0; sx < MAP_SECTORS; sx++) {
         for (let sy = 0; sy < MAP_SECTORS; sy++) {
             const key = `${sx}_${sy}`;
@@ -802,6 +802,7 @@ function render(now) {
     const activeSelected = selectedIslandId ? islandLookup.get(selectedIslandId) : null;
     const sourceIsland = dragSourceId ? islandLookup.get(dragSourceId) : activeSelected;
 
+    // Island Range Circle
     if (sourceIsland && sourceIsland.owner === myId) {
         ctx.save();
         ctx.beginPath();
@@ -895,7 +896,7 @@ function drawIsland(isle) {
         if (isle.gold > 0) {
             ctx.fillStyle = '#f5b041';
             ctx.font = 'bold 10px "Share Tech Mono", monospace';
-            ctx.fillText(`🪙${isle.gold}`, isle.x, isle.y - radius - 6);
+            ctx.fillText(`🪙${Math.floor(isle.gold)}`, isle.x, isle.y - radius - 6);
         }
 
         ctx.fillStyle = themeColor;

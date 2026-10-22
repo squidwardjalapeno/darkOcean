@@ -19,7 +19,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 const SECTOR_SIZE = 800;
 const MAP_SECTORS = 10;
 const SCOUT_TIME_MS = 30000;
-
 const SERVER_BOOT_TIME = Date.now();
 
 const ISLAND_TIERS = {
@@ -59,7 +58,6 @@ function rollIslandLevel(rng) {
     return 1;
 }
 
-// Formats island payload for client consumption with clean integers
 function formatIslandForClient(isle) {
     return {
         ...isle,
@@ -76,7 +74,7 @@ const games = new Map();          // gameId -> game
 class GameSession {
     constructor(id, players) {
         this.id = id;
-        this.players = players; // Array of { id: playerId, name: playerName }
+        this.players = players;
         this.sectors = new Map();
         this.allIslands = new Map();
         this.activeVoyages = new Map();
@@ -302,16 +300,18 @@ function findNextAutoScoutSector(playerState) {
 io.on('connection', (socket) => {
     let playerSession = null;
 
-    socket.on('authenticate', ({ token, name, bootTime }) => {
-        const isStaleBoot = !bootTime || bootTime !== SERVER_BOOT_TIME;
-        const safeToken = (!isStaleBoot && token) ? token : `tok_${Math.random().toString(36).substr(2, 9)}_${SERVER_BOOT_TIME}`;
-        const cleanName = (name && !isStaleBoot) ? name.slice(0, 4).toUpperCase() : null;
+    socket.on('authenticate', ({ token, name }) => {
+        // Use client's persistent token, or issue one if totally absent
+        const safeToken = token || `tok_${Math.random().toString(36).substr(2, 9)}_${SERVER_BOOT_TIME}`;
+        const cleanName = name ? name.slice(0, 4).toUpperCase() : null;
 
-        if (!isStaleBoot && playerSessions.has(safeToken)) {
+        if (playerSessions.has(safeToken)) {
+            // Existing session found in RAM
             playerSession = playerSessions.get(safeToken);
             playerSession.socketId = socket.id;
-            if (cleanName) playerSession.name = cleanName;
+            if (cleanName && !playerSession.name) playerSession.name = cleanName;
         } else {
+            // Brand-new player connection
             const playerId = `usr_${Math.random().toString(36).substr(2, 6)}`;
             playerSession = {
                 token: safeToken,
@@ -328,10 +328,18 @@ io.on('connection', (socket) => {
         socket.data.playerId = playerSession.playerId;
         socket.join(playerSession.playerId);
 
-        if (!isStaleBoot && playerSession.gameId && games.has(playerSession.gameId)) {
+        // RECONNECT TO ACTIVE RUNNING MATCH
+        if (playerSession.gameId && games.has(playerSession.gameId)) {
             const game = games.get(playerSession.gameId);
             if (!game.gameOver) {
                 socket.join(game.id);
+
+                // Notify opponent that we are back online!
+                io.to(game.id).emit('playerConnectionState', {
+                    playerId: playerSession.playerId,
+                    connected: true
+                });
+
                 const pState = game.playerStates.get(playerSession.playerId);
                 const revealed = Array.from(pState.discoveredSectors).map(key => {
                     const [sx, sy] = key.split('_').map(Number);
@@ -358,6 +366,7 @@ io.on('connection', (socket) => {
             }
         }
 
+        // Standard auth confirmation for menus / lobbies
         socket.emit('authConfirmed', {
             token: safeToken,
             serverBootTime: SERVER_BOOT_TIME,
@@ -568,11 +577,10 @@ io.on('connection', (socket) => {
         const isle = game.allIslands.get(data.islandId);
         if (!isle || isle.owner !== playerSession.playerId) return;
 
-        const upgradeType = data.type; // 'speed', 'range', 'defense'
+        const upgradeType = data.type;
         const currentLvl = isle.upgrades[upgradeType] || 0;
         if (currentLvl >= 5) return;
 
-        // 2x exponential curve on stat level AND 2x exponential curve on island tier level (2^(islandLevel - 1))
         const cost = Math.floor(50 * Math.pow(2, currentLvl) * Math.pow(2, isle.level - 1));
         if (isle.gold < cost) return;
 
@@ -686,10 +694,7 @@ setInterval(() => {
             if (isle.owner) {
                 const ratio = Math.max(0.01, isle.population / isle.maxPop);
                 if (ratio < 1.0) {
-                    // True logistic factor: peaks at 1.0 (50% capacity), drops near 0% and 100%
                     const logisticFactor = Math.max(0.08, 4 * ratio * (1 - ratio));
-                    
-                    // Continuous floating-point accumulation (no integer rounding or clamping to 1)
                     const popGain = isle.growth * logisticFactor;
                     isle.population = Math.min(isle.maxPop, Number((isle.population + popGain).toFixed(3)));
                 }
@@ -700,7 +705,6 @@ setInterval(() => {
             }
         }
 
-        // Send whole clean numbers to clients
         const syncedIslands = Array.from(game.allIslands.values()).map(formatIslandForClient);
         io.to(gId).emit('islandsSync', syncedIslands);
         game.checkWinCondition();
