@@ -41,13 +41,13 @@ let touchStartZoom = 0.75;
 let isPanning = false;
 let lastPanPos = { x: 0, y: 0 };
 
-// Exact power-of-2 island sizing (Level 1: 5px -> Level 7: 320px)
+// Power-of-2 island sizing (5px, 10px, 20px, 40px, 80px, 160px, 320px)
 function getIslandRadius(isle) {
     const radii = [0, 5, 10, 20, 40, 80, 160, 320];
     return radii[isle.level] || 5;
 }
 
-// Keep canvas resolution synced to the right-hand viewport container
+// Canvas strictly scales to fill the right-side container
 function resize() {
     if (viewportContainer) {
         canvas.width = viewportContainer.clientWidth;
@@ -61,11 +61,11 @@ window.addEventListener('resize', resize);
 resize();
 
 // ==========================================
-// 1. LOBBY & PRE-GAME UI
+// 1. PRE-GAME LOBBY CONTROLS
 // ==========================================
 const nameModal = document.getElementById('name-modal');
 const lobbyModal = document.getElementById('lobby-modal');
-const gameWorkspace = document.getElementById('game-workspace');
+const tacticalSidebar = document.getElementById('tactical-sidebar');
 const nameInput = document.getElementById('player-name-input');
 const submitNameBtn = document.getElementById('submit-name-btn');
 const createLobbyBtn = document.getElementById('create-lobby-btn');
@@ -105,16 +105,16 @@ socket.on('lobbyUpdated', () => socket.emit('getLobbies'));
 socket.on('lobbyList', (list) => {
     lobbyList.innerHTML = '';
     if (list.length === 0) {
-        lobbyList.innerHTML = '<div class="empty-notice">No open lobbies found. Create one!</div>';
+        lobbyList.innerHTML = '<div style="padding: 12px; text-align: center; color: var(--text-dim); font-size: 11px;">No open lobbies. Create one!</div>';
         return;
     }
 
     list.forEach(item => {
         const row = document.createElement('div');
-        row.className = 'lobby-item';
+        row.className = 'lobby-entry';
         row.innerHTML = `
             <div><strong>${item.host}'S SECTOR</strong> [${item.id}]</div>
-            <button class="sci-btn mini" data-id="${item.id}">ENGAGE</button>
+            <button class="action-btn" data-id="${item.id}" style="padding: 2px 8px;">ENGAGE</button>
         `;
         row.querySelector('button').onclick = () => socket.emit('joinLobby', item.id);
         lobbyList.appendChild(row);
@@ -124,7 +124,7 @@ socket.on('lobbyList', (list) => {
 socket.on('gameStarted', (data) => {
     nameModal.classList.add('hidden');
     lobbyModal.classList.add('hidden');
-    gameWorkspace.classList.remove('hidden');
+    tacticalSidebar.classList.remove('hidden');
     resize();
 
     myId = data.myId;
@@ -212,7 +212,7 @@ function selectIsland(isle) {
 }
 
 // ==========================================
-// 3. MOUSE & DRAG / CLICK-TO-ATTACK
+// 3. MOUSE / CLICK-TO-ATTACK
 // ==========================================
 canvas.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
@@ -291,7 +291,7 @@ canvas.addEventListener('wheel', (e) => {
 });
 
 // ==========================================
-// 4. MOBILE TOUCH SUPPORT & PINCH-ZOOM
+// 4. TOUCH & PINCH-ZOOM
 // ==========================================
 canvas.addEventListener('touchstart', (e) => {
     if (e.touches.length === 1) {
@@ -388,23 +388,8 @@ canvas.addEventListener('touchend', (e) => {
     }
 });
 
-// Keyboard Pan
-const PAN_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'];
-window.addEventListener('keydown', (e) => {
-    if (PAN_KEYS.includes(e.code)) {
-        e.preventDefault();
-        keysDown.add(e.code);
-    }
-});
-window.addEventListener('keyup', (e) => {
-    if (PAN_KEYS.includes(e.code)) {
-        e.preventDefault();
-        keysDown.delete(e.code);
-    }
-});
-
 // ==========================================
-// 5. SOCKET SYNCHRONIZATION
+// 5. SOCKET EVENTS
 // ==========================================
 socket.on('scoutUpdate', (scoutData) => {
     scout = scoutData;
@@ -476,14 +461,14 @@ socket.on('gameOver', (winner) => {
         desc.innerText = `YOU CONQUERED ${winner.pct}% OF THE MAP`;
     } else {
         title.innerText = "FLEET SUBJUGATED";
-        title.style.color = "#ff3838";
+        title.style.color = "#ff3b3b";
         desc.innerText = `${winner.name} TOOK ${winner.pct}% OF THE SEAS`;
     }
     modal.classList.remove('hidden');
 });
 
 // ==========================================
-// 6. HUD & EXPEDITION BUTTONS
+// 6. UI BUTTON WIRING
 // ==========================================
 document.getElementById('auto-scout-btn').onclick = () => {
     socket.emit('toggleAutoScout', !autoScoutEnabled);
@@ -547,21 +532,21 @@ function renderScores() {
 }
 
 // ==========================================
-// 7. SWAPPING BOTTOM DOCKYARD ARMORY
+// 7. BOTTOM PANEL SWAPPING LOGIC
 // ==========================================
-const standbyDock = document.getElementById('standby-dock');
-const activeDock = document.getElementById('active-dock');
+const standbyView = document.getElementById('standby-view');
+const armoryView = document.getElementById('armory-view');
 document.getElementById('close-inspector-btn').onclick = () => selectIsland(null);
 
 function showStandby() {
-    standbyDock.classList.remove('hidden');
-    activeDock.classList.add('hidden');
+    standbyView.style.display = 'flex';
+    armoryView.style.display = 'none';
     selectedIslandId = null;
 }
 
 function showArmory(isle) {
-    standbyDock.classList.add('hidden');
-    activeDock.classList.remove('hidden');
+    standbyView.style.display = 'none';
+    armoryView.style.display = 'flex';
     refreshArmory(isle);
 }
 
@@ -602,6 +587,7 @@ function render(now) {
     const dt = Math.min(0.1, (now - lastTime) / 1000);
     lastTime = now;
 
+    // Keyboard Pan
     let moveX = 0;
     let moveY = 0;
     if (keysDown.has('KeyW') || keysDown.has('ArrowUp')) moveY -= 1;
@@ -626,7 +612,7 @@ function render(now) {
     ctx.scale(camera.zoom, camera.zoom);
     ctx.translate(-camera.x, -camera.y);
 
-    // 1. Draw 10x10 Sectors
+    // Sectors
     for (let sx = 0; sx < MAP_SECTORS; sx++) {
         for (let sy = 0; sy < MAP_SECTORS; sy++) {
             const key = `${sx}_${sy}`;
@@ -661,15 +647,15 @@ function render(now) {
         }
     }
 
-    // Outer boundary
-    ctx.strokeStyle = 'rgba(0, 229, 255, 0.35)';
+    // Sea Perimeter
+    ctx.strokeStyle = 'rgba(0, 217, 255, 0.35)';
     ctx.lineWidth = 2;
     ctx.strokeRect(0, 0, MAP_SECTORS * SECTOR_SIZE, MAP_SECTORS * SECTOR_SIZE);
 
     const activeSelected = selectedIslandId ? islandLookup.get(selectedIslandId) : null;
     const sourceIsland = dragSourceId ? islandLookup.get(dragSourceId) : activeSelected;
 
-    // 2. Nautical Range Indicator
+    // Range Ring
     if (sourceIsland && sourceIsland.owner === myId) {
         ctx.save();
         ctx.beginPath();
@@ -683,20 +669,20 @@ function render(now) {
         ctx.restore();
     }
 
-    // 3. Draw Islands
+    // Islands
     for (const [id, isle] of islandLookup) {
         drawIsland(isle);
     }
 
-    // 4. Draw Voyages & Radar Alerts
+    // Voyages
     drawVoyagesAndAlerts();
 
-    // 5. Draw Attack Arrow
+    // Attack Line
     if (isDraggingAttack && sourceIsland) {
         drawAttackArrow(sourceIsland, dragCurrentPos.x, dragCurrentPos.y);
     }
 
-    // 6. Draw Scout Vessel
+    // Scout Ship
     drawScoutVessel();
 
     ctx.restore();
@@ -720,15 +706,14 @@ function drawIsland(isle) {
     ctx.arc(isle.x, isle.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = isMine 
         ? 'rgba(0, 255, 119, 0.15)' 
-        : isEnemy ? 'rgba(255, 56, 56, 0.15)' : 'rgba(25, 40, 55, 0.85)';
+        : isEnemy ? 'rgba(255, 59, 59, 0.15)' : 'rgba(25, 40, 55, 0.85)';
     ctx.fill();
 
-    const themeColor = isMine ? '#00ff77' : isEnemy ? '#ff3838' : '#7f93a5';
+    const themeColor = isMine ? '#00ff77' : isEnemy ? '#ff3b3b' : '#7f93a5';
     ctx.strokeStyle = themeColor;
     ctx.lineWidth = isMine ? 2.5 : (radius >= 80 ? 3.0 : 1.5);
     ctx.stroke();
 
-    // Tactical Selection Bracket
     if (isSelected) {
         ctx.save();
         const pulse = 4 + (Date.now() % 600) / 75;
@@ -791,7 +776,7 @@ function drawAttackArrow(source, tx, ty) {
     const efficiency = Math.round(decay * 100);
 
     const isOutOfReach = dist > range * 1.5;
-    const strokeColor = isOutOfReach ? '#ff3838' : '#00ff77';
+    const strokeColor = isOutOfReach ? '#ff3b3b' : '#00ff77';
 
     ctx.save();
     ctx.beginPath();
@@ -836,14 +821,14 @@ function drawVoyagesAndAlerts() {
         ctx.setLineDash([4, 4]);
         ctx.moveTo(v.startX, v.startY);
         ctx.lineTo(curX, curY);
-        ctx.strokeStyle = isMine ? 'rgba(0, 255, 119, 0.4)' : 'rgba(255, 56, 56, 0.4)';
+        ctx.strokeStyle = isMine ? 'rgba(0, 255, 119, 0.4)' : 'rgba(255, 59, 59, 0.4)';
         ctx.lineWidth = 1.5;
         ctx.stroke();
         ctx.setLineDash([]);
 
         ctx.beginPath();
         ctx.arc(curX, curY, 5, 0, Math.PI * 2);
-        ctx.fillStyle = isMine ? '#00ff77' : '#ff3838';
+        ctx.fillStyle = isMine ? '#00ff77' : '#ff3b3b';
         ctx.fill();
 
         ctx.fillStyle = '#ffffff';
@@ -857,7 +842,7 @@ function drawVoyagesAndAlerts() {
             ctx.setLineDash([8, 8]);
             ctx.moveTo(curX, curY);
             ctx.lineTo(targetIsland.x, targetIsland.y);
-            ctx.strokeStyle = '#ff3838';
+            ctx.strokeStyle = '#ff3b3b';
             ctx.lineWidth = 2.5;
             ctx.stroke();
             ctx.setLineDash([]);
@@ -865,13 +850,13 @@ function drawVoyagesAndAlerts() {
             const pulse = 10 + (Date.now() % 800) / 40;
             ctx.beginPath();
             ctx.arc(targetIsland.x, targetIsland.y, getIslandRadius(targetIsland) + pulse, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(255, 56, 56, 0.5)';
+            ctx.strokeStyle = 'rgba(255, 59, 59, 0.5)';
             ctx.lineWidth = 2;
             ctx.stroke();
 
             ctx.fillStyle = 'rgba(4, 15, 30, 0.85)';
             ctx.fillRect(targetIsland.x - 70, targetIsland.y - getIslandRadius(targetIsland) - 30, 140, 20);
-            ctx.strokeStyle = '#ff3838';
+            ctx.strokeStyle = '#ff3b3b';
             ctx.lineWidth = 1;
             ctx.strokeRect(targetIsland.x - 70, targetIsland.y - getIslandRadius(targetIsland) - 30, 140, 20);
 
