@@ -20,6 +20,9 @@ const SECTOR_SIZE = 800;
 const MAP_SECTORS = 10;
 const SCOUT_TIME_MS = 30000;
 
+// server.js (Top of file, add boot timestamp)
+const SERVER_BOOT_TIME = Date.now();
+
 const ISLAND_TIERS = {
     1: { name: "Sandbar",           points: 1,     maxPop: 150,   growth: 0.5, defense: 1.0,  range: 500,  speed: 22 },
     2: { name: "Reef Haven",        points: 5,     maxPop: 400,   growth: 1.2, defense: 1.15, range: 850,  speed: 25 },
@@ -292,20 +295,23 @@ function findNextAutoScoutSector(playerState) {
 io.on('connection', (socket) => {
     let playerSession = null;
 
-    socket.on('authenticate', ({ token, name }) => {
-        const cleanName = (name || "CAPT").slice(0, 4).toUpperCase();
-        const safeToken = token || `tok_${Math.random().toString(36).substr(2, 9)}`;
+    socket.on('authenticate', ({ token, name, bootTime }) => {
+        // If the client's token or boot time is from a previous server restart, force reset!
+        const isStaleBoot = !bootTime || bootTime !== SERVER_BOOT_TIME;
+        const safeToken = (!isStaleBoot && token) ? token : `tok_${Math.random().toString(36).substr(2, 9)}_${SERVER_BOOT_TIME}`;
+        const cleanName = (name && !isStaleBoot) ? name.slice(0, 4).toUpperCase() : null;
 
-        if (playerSessions.has(safeToken)) {
+        if (!isStaleBoot && playerSessions.has(safeToken)) {
             playerSession = playerSessions.get(safeToken);
             playerSession.socketId = socket.id;
-            if (name) playerSession.name = cleanName;
+            if (cleanName) playerSession.name = cleanName;
         } else {
-            const playerId = `usr_${safeToken.slice(-6)}`;
+            // New or stale session: Do NOT assign a name yet, force them to input one!
+            const playerId = `usr_${Math.random().toString(36).substr(2, 6)}`;
             playerSession = {
                 token: safeToken,
                 playerId,
-                name: cleanName,
+                name: cleanName, // null if fresh boot
                 socketId: socket.id,
                 lobbyId: null,
                 gameId: null
@@ -315,24 +321,19 @@ io.on('connection', (socket) => {
 
         socket.data.token = safeToken;
         socket.data.playerId = playerSession.playerId;
-
-        // Join individual room named after playerId for resilient targeted messages
         socket.join(playerSession.playerId);
 
-        // Check if player has an active running game to resume
-        if (playerSession.gameId && games.has(playerSession.gameId)) {
+        // If they have a valid active game on this current boot, reconnect them
+        if (!isStaleBoot && playerSession.gameId && games.has(playerSession.gameId)) {
             const game = games.get(playerSession.gameId);
-
             if (!game.gameOver) {
                 socket.join(game.id);
-
                 const pState = game.playerStates.get(playerSession.playerId);
                 const revealed = Array.from(pState.discoveredSectors).map(key => {
                     const [sx, sy] = key.split('_').map(Number);
                     return { key, sx, sy, islands: game.sectors.get(key) };
                 });
 
-                // Send immediate snapshot restoration
                 socket.emit('gameReconnected', {
                     token: safeToken,
                     gameId: game.id,
@@ -348,23 +349,20 @@ io.on('connection', (socket) => {
                     totalWorldPoints: game.totalWorldPoints,
                     activeVoyages: Array.from(game.activeVoyages.values())
                 });
-
-                // Notify opponent of return
-                io.to(game.id).emit('playerConnectionState', {
-                    playerId: playerSession.playerId,
-                    connected: true
-                });
                 return;
             }
         }
 
-        // Otherwise confirm normal authentication
+        // Send back server boot time and whether a valid name already exists
         socket.emit('authConfirmed', {
             token: safeToken,
+            serverBootTime: SERVER_BOOT_TIME,
+            hasName: !!playerSession.name,
             name: playerSession.name,
             playerId: playerSession.playerId
         });
     });
+
 
     socket.on('setPlayerName', (name) => {
         if (!playerSession) return;

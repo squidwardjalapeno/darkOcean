@@ -1,4 +1,5 @@
 // public/client.js
+// public/client.js (Replace top session setup and auth listeners)
 const socket = io();
 const canvas = document.getElementById('viewport');
 const ctx = canvas.getContext('2d');
@@ -11,9 +12,8 @@ if (!myToken) {
     localStorage.setItem('dark_ocean_token', myToken);
 }
 
-let savedName = localStorage.getItem('dark_ocean_name') || "";
 let myId = null;
-let myName = savedName || "CAPT";
+let myName = "";
 let enemyId = null;
 let enemyName = "ENEMY";
 let totalWorldPoints = 1;
@@ -67,27 +67,7 @@ window.addEventListener('resize', resize);
 resize();
 
 // ==========================================
-// 1. KEYBOARD CONTROLS
-// ==========================================
-const PAN_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'];
-
-window.addEventListener('keydown', (e) => {
-    if (e.target && e.target.tagName === 'INPUT') return;
-    if (PAN_KEYS.includes(e.code)) {
-        e.preventDefault();
-        keysDown.add(e.code);
-    }
-});
-
-window.addEventListener('keyup', (e) => {
-    if (PAN_KEYS.includes(e.code)) {
-        e.preventDefault();
-        keysDown.delete(e.code);
-    }
-});
-
-// ==========================================
-// 2. SESSION AUTHENTICATION & RECONNECT
+// 1. AUTHENTICATION & RENDER RESTART SYNC
 // ==========================================
 const nameModal = document.getElementById('name-modal');
 const lobbyModal = document.getElementById('lobby-modal');
@@ -105,18 +85,29 @@ const slotP1 = document.getElementById('slot-p1');
 const slotP2 = document.getElementById('slot-p2');
 const launchMatchBtn = document.getElementById('launch-match-btn');
 
-if (savedName) {
-    nameInput.value = savedName;
-}
-
-// Handshake immediately upon connecting
 socket.on('connect', () => {
-    socket.emit('authenticate', { token: myToken, name: savedName });
+    const storedBootTime = localStorage.getItem('dark_ocean_boot_time');
+    const storedName = localStorage.getItem('dark_ocean_name');
+    socket.emit('authenticate', { 
+        token: myToken, 
+        name: storedName, 
+        bootTime: storedBootTime ? Number(storedBootTime) : null 
+    });
 });
 
 socket.on('authConfirmed', (data) => {
     myId = data.playerId;
-    if (savedName) {
+    
+    // Save current server boot time
+    localStorage.setItem('dark_ocean_boot_time', data.serverBootTime);
+
+    // If server wiped its memory (Render restart), force them to re-enter name!
+    if (!data.hasName) {
+        localStorage.removeItem('dark_ocean_name');
+        nameModal.classList.remove('hidden');
+        lobbyModal.classList.add('hidden');
+    } else {
+        myName = data.name;
         nameModal.classList.add('hidden');
         lobbyModal.classList.remove('hidden');
         displayCallsign.innerText = myName;
