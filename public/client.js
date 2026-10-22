@@ -7,12 +7,7 @@ const viewportContainer = document.getElementById('viewport-container');
 // ==========================================
 // 1. SESSION PERSISTENCE & GLOBAL STATE
 // ==========================================
-let myToken = localStorage.getItem('dark_ocean_token');
-if (!myToken) {
-    myToken = `tok_${Math.random().toString(36).substr(2, 9)}_${Date.now().toString(36)}`;
-    localStorage.setItem('dark_ocean_token', myToken);
-}
-
+let myToken = localStorage.getItem('dark_ocean_token') || null;
 let myId = null;
 let myName = "";
 let enemyId = null;
@@ -98,24 +93,25 @@ const slotP2 = document.getElementById('slot-p2');
 const launchMatchBtn = document.getElementById('launch-match-btn');
 
 socket.on('connect', () => {
-    const storedName = localStorage.getItem('dark_ocean_name');
+    const storedBootTime = localStorage.getItem('dark_ocean_boot_time');
     socket.emit('authenticate', { 
         token: myToken, 
-        name: storedName
+        bootTime: storedBootTime ? Number(storedBootTime) : null
     });
 });
 
 socket.on('authConfirmed', (data) => {
     myId = data.playerId;
-    
-    if (data.token) {
-        myToken = data.token;
-        localStorage.setItem('dark_ocean_token', myToken);
-    }
+    myToken = data.token;
+    localStorage.setItem('dark_ocean_token', myToken);
+    localStorage.setItem('dark_ocean_boot_time', data.serverBootTime);
 
-    if (!data.hasName) {
+    // If fresh boot or name is absent, wipe cached names and force prompt
+    if (data.isFreshSession || !data.hasName) {
+        localStorage.removeItem('dark_ocean_name');
         nameModal.classList.remove('hidden');
         lobbyModal.classList.add('hidden');
+        tacticalSidebar.classList.add('hidden');
     } else {
         myName = data.name;
         localStorage.setItem('dark_ocean_name', myName);
@@ -126,12 +122,11 @@ socket.on('authConfirmed', (data) => {
     }
 });
 
-// Seamless Reconnection to Active Running Match
+// Seamless Reconnection to Active Running Match (Closeout / Refresh)
 socket.on('gameReconnected', (data) => {
-    if (data.token) {
-        myToken = data.token;
-        localStorage.setItem('dark_ocean_token', myToken);
-    }
+    myToken = data.token;
+    localStorage.setItem('dark_ocean_token', myToken);
+    localStorage.setItem('dark_ocean_boot_time', data.serverBootTime);
 
     nameModal.classList.add('hidden');
     lobbyModal.classList.add('hidden');
@@ -141,6 +136,8 @@ socket.on('gameReconnected', (data) => {
 
     myId = data.myId;
     myName = data.name;
+    localStorage.setItem('dark_ocean_name', myName);
+    
     SECTOR_SIZE = data.sectorSize;
     MAP_SECTORS = data.mapSectors;
     SCOUT_TIME_MS = data.scoutTimeMs;
@@ -199,7 +196,6 @@ submitNameBtn.onclick = () => {
     const val = nameInput.value.trim().slice(0, 4);
     if (!val) return;
     myName = val;
-    localStorage.setItem('dark_ocean_name', myName);
     socket.emit('setPlayerName', myName);
 };
 
@@ -802,7 +798,6 @@ function render(now) {
     const activeSelected = selectedIslandId ? islandLookup.get(selectedIslandId) : null;
     const sourceIsland = dragSourceId ? islandLookup.get(dragSourceId) : activeSelected;
 
-    // Island Range Circle
     if (sourceIsland && sourceIsland.owner === myId) {
         ctx.save();
         ctx.beginPath();

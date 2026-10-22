@@ -300,80 +300,96 @@ function findNextAutoScoutSector(playerState) {
 io.on('connection', (socket) => {
     let playerSession = null;
 
-    socket.on('authenticate', ({ token, name }) => {
-        // Use client's persistent token, or issue one if totally absent
-        const safeToken = token || `tok_${Math.random().toString(36).substr(2, 9)}_${SERVER_BOOT_TIME}`;
-        const cleanName = name ? name.slice(0, 4).toUpperCase() : null;
+    socket.on('authenticate', ({ token, bootTime }) => {
+        // Did the server reboot, or is this token from a previous server session?
+        const isServerReboot = !bootTime || bootTime !== SERVER_BOOT_TIME;
 
-        if (playerSessions.has(safeToken)) {
-            // Existing session found in RAM
-            playerSession = playerSessions.get(safeToken);
+        if (!isServerReboot && token && playerSessions.has(token)) {
+            // VALID RECONNECT (Same server run: player closed tab, refreshed, or had momentary drop)
+            playerSession = playerSessions.get(token);
             playerSession.socketId = socket.id;
-            if (cleanName && !playerSession.name) playerSession.name = cleanName;
+
+            socket.data.token = token;
+            socket.data.playerId = playerSession.playerId;
+            socket.join(playerSession.playerId);
+
+            // Rejoin active match if in progress
+            if (playerSession.gameId && games.has(playerSession.gameId)) {
+                const game = games.get(playerSession.gameId);
+                if (!game.gameOver) {
+                    socket.join(game.id);
+
+                    io.to(game.id).emit('playerConnectionState', {
+                        playerId: playerSession.playerId,
+                        connected: true
+                    });
+
+                    const pState = game.playerStates.get(playerSession.playerId);
+                    const revealed = Array.from(pState.discoveredSectors).map(key => {
+                        const [sx, sy] = key.split('_').map(Number);
+                        const isles = game.sectors.get(key) || [];
+                        return { key, sx, sy, islands: isles.map(formatIslandForClient) };
+                    });
+
+                    socket.emit('gameReconnected', {
+                        token: token,
+                        serverBootTime: SERVER_BOOT_TIME,
+                        gameId: game.id,
+                        myId: playerSession.playerId,
+                        name: playerSession.name,
+                        sectorSize: SECTOR_SIZE,
+                        mapSectors: MAP_SECTORS,
+                        scoutTimeMs: SCOUT_TIME_MS,
+                        players: game.players.map(pl => ({ id: pl.id, name: pl.name })),
+                        revealedSectors: revealed,
+                        scout: pState.scout,
+                        autoScout: pState.autoScout,
+                        totalWorldPoints: game.totalWorldPoints,
+                        activeVoyages: Array.from(game.activeVoyages.values())
+                    });
+                    return;
+                }
+            }
+
+            // In menu/lobby on current server run
+            socket.emit('authConfirmed', {
+                token: token,
+                serverBootTime: SERVER_BOOT_TIME,
+                hasName: !!playerSession.name,
+                name: playerSession.name,
+                playerId: playerSession.playerId,
+                isFreshSession: false
+            });
+
         } else {
-            // Brand-new player connection
+            // FRESH BOOT / SERVER RESTART / BRAND-NEW USER
+            // Explicitly set name to null so users MUST enter their callsign
+            const freshToken = `tok_${Math.random().toString(36).substr(2, 9)}_${SERVER_BOOT_TIME}`;
             const playerId = `usr_${Math.random().toString(36).substr(2, 6)}`;
+
             playerSession = {
-                token: safeToken,
+                token: freshToken,
                 playerId,
-                name: cleanName,
+                name: null, 
                 socketId: socket.id,
                 lobbyId: null,
                 gameId: null
             };
-            playerSessions.set(safeToken, playerSession);
+            playerSessions.set(freshToken, playerSession);
+
+            socket.data.token = freshToken;
+            socket.data.playerId = playerId;
+            socket.join(playerId);
+
+            socket.emit('authConfirmed', {
+                token: freshToken,
+                serverBootTime: SERVER_BOOT_TIME,
+                hasName: false,
+                name: null,
+                playerId: playerId,
+                isFreshSession: true
+            });
         }
-
-        socket.data.token = safeToken;
-        socket.data.playerId = playerSession.playerId;
-        socket.join(playerSession.playerId);
-
-        // RECONNECT TO ACTIVE RUNNING MATCH
-        if (playerSession.gameId && games.has(playerSession.gameId)) {
-            const game = games.get(playerSession.gameId);
-            if (!game.gameOver) {
-                socket.join(game.id);
-
-                // Notify opponent that we are back online!
-                io.to(game.id).emit('playerConnectionState', {
-                    playerId: playerSession.playerId,
-                    connected: true
-                });
-
-                const pState = game.playerStates.get(playerSession.playerId);
-                const revealed = Array.from(pState.discoveredSectors).map(key => {
-                    const [sx, sy] = key.split('_').map(Number);
-                    const isles = game.sectors.get(key) || [];
-                    return { key, sx, sy, islands: isles.map(formatIslandForClient) };
-                });
-
-                socket.emit('gameReconnected', {
-                    token: safeToken,
-                    gameId: game.id,
-                    myId: playerSession.playerId,
-                    name: playerSession.name,
-                    sectorSize: SECTOR_SIZE,
-                    mapSectors: MAP_SECTORS,
-                    scoutTimeMs: SCOUT_TIME_MS,
-                    players: game.players.map(pl => ({ id: pl.id, name: pl.name })),
-                    revealedSectors: revealed,
-                    scout: pState.scout,
-                    autoScout: pState.autoScout,
-                    totalWorldPoints: game.totalWorldPoints,
-                    activeVoyages: Array.from(game.activeVoyages.values())
-                });
-                return;
-            }
-        }
-
-        // Standard auth confirmation for menus / lobbies
-        socket.emit('authConfirmed', {
-            token: safeToken,
-            serverBootTime: SERVER_BOOT_TIME,
-            hasName: !!playerSession.name,
-            name: playerSession.name,
-            playerId: playerSession.playerId
-        });
     });
 
     socket.on('setPlayerName', (name) => {
