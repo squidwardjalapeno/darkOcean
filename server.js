@@ -29,11 +29,11 @@ const ISLAND_TIERS = {
 };
 
 const MINE_TIERS = {
-    1: { name: "Gold Reef",      points: 2,   maxPop: 200,  growth: 0.4, maxGold: 400,   goldGrowth: 1.0, defense: 1.0,  range: 550,  speed: 22 },
-    2: { name: "Pike Vein",      points: 10,  maxPop: 450,  growth: 0.9, maxGold: 1000,  goldGrowth: 2.0, defense: 1.1,  range: 950,  speed: 25 },
-    3: { name: "Gilded Atoll",   points: 40,  maxPop: 950,  growth: 1.8, maxGold: 2500,  goldGrowth: 4.0, defense: 1.25, range: 1600, speed: 28 },
-    4: { name: "Sunken Vault",   points: 180, maxPop: 1900, growth: 3.2, maxGold: 6000,  goldGrowth: 8.0, defense: 1.45, range: 2600, speed: 32 },
-    5: { name: "El Dorado Core", points: 750, maxPop: 3800, growth: 5.5, maxGold: 12000, goldGrowth: 15.0,defense: 1.75, range: 4200, speed: 36 }
+    1: { name: "Gold Reef",      points: 2,   maxPop: 180,  growth: 0.4, maxGold: 400,   goldGrowth: 1.5, defense: 1.0,  range: 550,  speed: 22 },
+    2: { name: "Pike Vein",      points: 10,  maxPop: 420,  growth: 0.9, maxGold: 1000,  goldGrowth: 2.5, defense: 1.1,  range: 950,  speed: 25 },
+    3: { name: "Gilded Atoll",   points: 40,  maxPop: 900,  growth: 1.8, maxGold: 2500,  goldGrowth: 5.0, defense: 1.25, range: 1600, speed: 28 },
+    4: { name: "Sunken Vault",   points: 180, maxPop: 1800, growth: 3.2, maxGold: 6000,  goldGrowth: 10.0,defense: 1.45, range: 2600, speed: 32 },
+    5: { name: "El Dorado Core", points: 750, maxPop: 3500, growth: 5.5, maxGold: 12000, goldGrowth: 20.0,defense: 1.75, range: 4200, speed: 36 }
 };
 
 function pseudoRandom(seed) {
@@ -55,10 +55,10 @@ function rollIslandLevel(rng) {
     return 1;
 }
 
-// Global Match & Room Tracking
 const lobbies = new Map();
 const games = new Map();
-const socketToGameId = new Map(); // Guaranteed game lookup for every socket
+const socketToGameId = new Map();
+const socketToLobbyId = new Map();
 
 class GameSession {
     constructor(id, players) {
@@ -76,18 +76,21 @@ class GameSession {
     }
 
     initWorld() {
-        const mapSeed = Math.floor(Math.random() * 1000000);
+        const matchSeed = (Math.random() * 0x7FFFFFFF) | 0;
+
         for (let sx = 0; sx < MAP_SECTORS; sx++) {
             for (let sy = 0; sy < MAP_SECTORS; sy++) {
                 const sKey = `${sx}_${sy}`;
-                const rng = pseudoRandom(mapSeed + (sx * 73856093) ^ (sy * 19349663));
+                const sectorSeed = (matchSeed ^ (sx * 73856093) ^ (sy * 19349663)) | 0;
+                const rng = pseudoRandom(sectorSeed);
                 const count = 3 + Math.floor(rng() * 3);
                 const sectorIslands = [];
 
                 for (let i = 0; i < count; i++) {
-                    const isMine = rng() < 0.18;
+                    // 25% mine chance ensures healthy gold reef distributions
+                    const isMine = rng() < 0.25;
                     const level = rollIslandLevel(rng);
-                    const padding = 140;
+                    const padding = 130;
                     const localX = padding + Math.floor(rng() * (SECTOR_SIZE - padding * 2));
                     const localY = padding + Math.floor(rng() * (SECTOR_SIZE - padding * 2));
                     const isleId = `isle_${this.id}_${sx}_${sy}_${i}`;
@@ -107,7 +110,7 @@ class GameSession {
                             population: Math.max(10, Math.floor(t.maxPop * 0.20)),
                             maxPop: t.maxPop,
                             growth: t.growth,
-                            gold: 30,
+                            gold: 35,
                             maxGold: t.maxGold,
                             goldGrowth: t.goldGrowth,
                             defense: t.defense,
@@ -148,10 +151,15 @@ class GameSession {
             }
         }
 
-        const spawns = [
-            { sx: 1 + Math.floor(Math.random() * 2), sy: 1 + Math.floor(Math.random() * 2) },
-            { sx: 7 + Math.floor(Math.random() * 2), sy: 7 + Math.floor(Math.random() * 2) }
-        ];
+        // Randomize player spawns with fair spacing (>= 5 sectors apart)
+        let spawnA, spawnB, dist;
+        do {
+            spawnA = { sx: Math.floor(Math.random() * MAP_SECTORS), sy: Math.floor(Math.random() * MAP_SECTORS) };
+            spawnB = { sx: Math.floor(Math.random() * MAP_SECTORS), sy: Math.floor(Math.random() * MAP_SECTORS) };
+            dist = Math.hypot(spawnA.sx - spawnB.sx, spawnA.sy - spawnB.sy);
+        } while (dist < 4.5);
+
+        const spawns = [spawnA, spawnB];
 
         this.players.forEach((p, idx) => {
             const sp = spawns[idx];
@@ -159,8 +167,12 @@ class GameSession {
             const sIslands = this.sectors.get(secKey);
             const homeIsle = sIslands[0];
 
+            // Always configure starter home as a pure Level 2 NORMAL island
             homeIsle.owner = p.id;
+            homeIsle.type = 'NORMAL';
             homeIsle.level = 2;
+            homeIsle.points = ISLAND_TIERS[2].points;
+            homeIsle.name = `Home Port [${sp.sx}:${sp.sy}]`;
             homeIsle.maxPop = ISLAND_TIERS[2].maxPop;
             homeIsle.range = ISLAND_TIERS[2].range;
             homeIsle.growth = ISLAND_TIERS[2].growth;
@@ -168,10 +180,12 @@ class GameSession {
             homeIsle.speed = ISLAND_TIERS[2].speed;
             homeIsle.population = 250;
             homeIsle.gold = 75;
+            homeIsle.goldGrowth = 0;
 
             this.playerStates.set(p.id, {
                 id: p.id,
                 name: p.name,
+                homeSector: { sx: sp.sx, sy: sp.sy },
                 autoScout: false,
                 discoveredSectors: new Set([secKey]),
                 scout: {
@@ -237,6 +251,7 @@ class GameSession {
 function findNextAutoScoutSector(playerState) {
     const visited = new Set(playerState.discoveredSectors);
     const candidateSectors = [];
+    const home = playerState.homeSector;
 
     for (const chartedKey of playerState.discoveredSectors) {
         const [cx, cy] = chartedKey.split('_').map(Number);
@@ -250,16 +265,20 @@ function findNextAutoScoutSector(playerState) {
         for (const n of neighbors) {
             if (n.sx < 0 || n.sx >= MAP_SECTORS || n.sy < 0 || n.sy >= MAP_SECTORS) continue;
             const nKey = `${n.sx}_${n.sy}`;
+
             if (!visited.has(nKey)) {
                 visited.add(nKey);
-                const distFromOrigin = Math.hypot(n.sx - 4.5, n.sy - 4.5);
-                candidateSectors.push({ ...n, dist: distFromOrigin });
+                const distFromHome = Math.hypot(n.sx - home.sx, n.sy - home.sy);
+                let angle = Math.atan2(n.sy - home.sy, n.sx - home.sx);
+                if (angle < 0) angle += Math.PI * 2;
+
+                candidateSectors.push({ ...n, dist: distFromHome, angle });
             }
         }
     }
 
     if (candidateSectors.length === 0) return null;
-    candidateSectors.sort((a, b) => a.dist - b.dist);
+    candidateSectors.sort((a, b) => a.dist - b.dist || a.angle - b.angle);
     return candidateSectors[0];
 }
 
@@ -274,7 +293,7 @@ io.on('connection', (socket) => {
     socket.on('getLobbies', () => {
         const list = [];
         for (const [id, lobby] of lobbies) {
-            if (lobby.players.length < 2 && !lobby.started) {
+            if (!lobby.started) {
                 list.push({
                     id,
                     host: lobby.players[0].name,
@@ -289,25 +308,68 @@ io.on('connection', (socket) => {
         const lobbyId = `LOBBY_${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
         const lobby = {
             id: lobbyId,
+            hostId: socket.id,
             players: [{ id: socket.id, name: playerName }],
             started: false
         };
         lobbies.set(lobbyId, lobby);
+        socketToLobbyId.set(socket.id, lobbyId);
         socket.join(lobbyId);
 
-        socket.emit('lobbyCreated', { lobbyId, host: playerName });
+        socket.emit('lobbyState', {
+            lobbyId,
+            host: playerName,
+            isHost: true,
+            players: lobby.players.map(p => p.name)
+        });
         io.emit('lobbyUpdated');
     });
 
     socket.on('joinLobby', (lobbyId) => {
         const lobby = lobbies.get(lobbyId);
-        if (!lobby || lobby.players.length >= 2 || lobby.started) {
-            socket.emit('joinError', 'Lobby is full or expired.');
+
+        if (!lobby || lobby.started) {
+            socket.emit('lobbyError', 'Sector is expired or closed.');
+            return;
+        }
+
+        if (lobby.players.some(p => p.id === socket.id)) {
+            socket.emit('lobbyError', 'You are already docked in this sector.');
+            return;
+        }
+
+        if (lobby.players.length >= 2) {
+            socket.emit('lobbyError', 'Sector frequency is full (2/2).');
             return;
         }
 
         lobby.players.push({ id: socket.id, name: playerName });
+        socketToLobbyId.set(socket.id, lobbyId);
         socket.join(lobbyId);
+
+        io.to(lobbyId).emit('lobbyState', {
+            lobbyId: lobby.id,
+            host: lobby.players[0].name,
+            isHost: false,
+            players: lobby.players.map(p => p.name)
+        });
+
+        io.emit('lobbyUpdated');
+    });
+
+    socket.on('requestStartGame', () => {
+        const lobbyId = socketToLobbyId.get(socket.id);
+        if (!lobbyId) return;
+
+        const lobby = lobbies.get(lobbyId);
+        if (!lobby) return;
+
+        if (lobby.players.length < 2) {
+            socket.emit('lobbyError', 'Cannot launch: 2 commanders required (1/2 docked).');
+            return;
+        }
+
+        if (lobby.started) return;
         lobby.started = true;
 
         const game = new GameSession(lobbyId, lobby.players);
@@ -445,11 +507,27 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
+        const lobbyId = socketToLobbyId.get(socket.id);
+        if (lobbyId && lobbies.has(lobbyId)) {
+            const lobby = lobbies.get(lobbyId);
+            lobby.players = lobby.players.filter(p => p.id !== socket.id);
+
+            if (lobby.players.length === 0) {
+                lobbies.delete(lobbyId);
+            } else {
+                io.to(lobbyId).emit('lobbyState', {
+                    lobbyId: lobby.id,
+                    host: lobby.players[0].name,
+                    players: lobby.players.map(p => p.name)
+                });
+            }
+            io.emit('lobbyUpdated');
+        }
         socketToGameId.delete(socket.id);
+        socketToLobbyId.delete(socket.id);
     });
 });
 
-// 20Hz Tick: Scouts and Voyages
 setInterval(() => {
     const now = Date.now();
 
@@ -499,7 +577,6 @@ setInterval(() => {
     }
 }, 50);
 
-// 1Hz Tick: Population Growth & Gold
 setInterval(() => {
     for (const [gId, game] of games) {
         if (game.gameOver) continue;

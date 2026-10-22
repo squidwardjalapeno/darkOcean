@@ -13,7 +13,7 @@ let SECTOR_SIZE = 800;
 let MAP_SECTORS = 10;
 let SCOUT_TIME_MS = 30000;
 
-// Camera
+// Camera & Panning
 let camera = { x: 400, y: 400, zoom: 0.75 };
 const PAN_SPEED = 700;
 const keysDown = new Set();
@@ -41,13 +41,11 @@ let touchStartZoom = 0.75;
 let isPanning = false;
 let lastPanPos = { x: 0, y: 0 };
 
-// Power-of-2 island sizing (5px, 10px, 20px, 40px, 80px, 160px, 320px)
 function getIslandRadius(isle) {
     const radii = [0, 5, 10, 20, 40, 80, 160, 320];
     return radii[isle.level] || 5;
 }
 
-// Canvas strictly scales to fill the right-side container
 function resize() {
     if (viewportContainer) {
         canvas.width = viewportContainer.clientWidth;
@@ -61,7 +59,27 @@ window.addEventListener('resize', resize);
 resize();
 
 // ==========================================
-// 1. PRE-GAME LOBBY CONTROLS
+// 1. KEYBOARD WASD & ARROWS
+// ==========================================
+const PAN_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'];
+
+window.addEventListener('keydown', (e) => {
+    if (e.target && e.target.tagName === 'INPUT') return;
+    if (PAN_KEYS.includes(e.code)) {
+        e.preventDefault();
+        keysDown.add(e.code);
+    }
+});
+
+window.addEventListener('keyup', (e) => {
+    if (PAN_KEYS.includes(e.code)) {
+        e.preventDefault();
+        keysDown.delete(e.code);
+    }
+});
+
+// ==========================================
+// 2. LOBBY & PRE-GAME UI
 // ==========================================
 const nameModal = document.getElementById('name-modal');
 const lobbyModal = document.getElementById('lobby-modal');
@@ -72,7 +90,12 @@ const createLobbyBtn = document.getElementById('create-lobby-btn');
 const refreshLobbiesBtn = document.getElementById('refresh-lobbies-btn');
 const lobbyList = document.getElementById('lobby-list');
 const displayCallsign = document.getElementById('display-callsign');
-const waitingNotice = document.getElementById('waiting-notice');
+const lobbyErrorMsg = document.getElementById('lobby-error-msg');
+const lobbyDirectoryView = document.getElementById('lobby-directory-view');
+const lobbyRoomView = document.getElementById('lobby-room-view');
+const slotP1 = document.getElementById('slot-p1');
+const slotP2 = document.getElementById('slot-p2');
+const launchMatchBtn = document.getElementById('launch-match-btn');
 
 submitNameBtn.onclick = () => {
     const val = nameInput.value.trim().slice(0, 4);
@@ -92,12 +115,44 @@ socket.on('nameConfirmed', (name) => {
     socket.emit('getLobbies');
 });
 
-createLobbyBtn.onclick = () => socket.emit('createLobby');
-refreshLobbiesBtn.onclick = () => socket.emit('getLobbies');
+createLobbyBtn.onclick = () => {
+    lobbyErrorMsg.classList.add('hidden');
+    socket.emit('createLobby');
+};
 
-socket.on('lobbyCreated', () => {
+refreshLobbiesBtn.onclick = () => {
+    lobbyErrorMsg.classList.add('hidden');
+    socket.emit('getLobbies');
+};
+
+launchMatchBtn.onclick = () => {
+    socket.emit('requestStartGame');
+};
+
+socket.on('lobbyError', (msg) => {
+    lobbyErrorMsg.innerText = msg;
+    lobbyErrorMsg.classList.remove('hidden');
+});
+
+socket.on('lobbyState', (data) => {
+    lobbyErrorMsg.classList.add('hidden');
     createLobbyBtn.disabled = true;
-    waitingNotice.classList.remove('hidden');
+    lobbyDirectoryView.classList.add('hidden');
+    lobbyRoomView.classList.remove('hidden');
+
+    slotP1.innerText = data.players[0] || 'AWAITING...';
+    slotP2.innerText = data.players[1] || 'AWAITING OPPONENT...';
+    slotP2.style.color = data.players[1] ? '#00ff77' : '#f5b041';
+
+    if (data.players.length === 2) {
+        launchMatchBtn.innerText = "LAUNCH MATCH [READY: 2/2]";
+        launchMatchBtn.style.background = "#00ff77";
+        launchMatchBtn.style.color = "#020710";
+    } else {
+        launchMatchBtn.innerText = "WAITING FOR OPPONENT [1/2]";
+        launchMatchBtn.style.background = "#09213a";
+        launchMatchBtn.style.color = "#d0e2f2";
+    }
 });
 
 socket.on('lobbyUpdated', () => socket.emit('getLobbies'));
@@ -105,7 +160,7 @@ socket.on('lobbyUpdated', () => socket.emit('getLobbies'));
 socket.on('lobbyList', (list) => {
     lobbyList.innerHTML = '';
     if (list.length === 0) {
-        lobbyList.innerHTML = '<div style="padding: 12px; text-align: center; color: var(--text-dim); font-size: 11px;">No open lobbies. Create one!</div>';
+        lobbyList.innerHTML = '<div style="padding: 12px; text-align: center; color: var(--text-dim); font-size: 11px;">No open sectors. Create one!</div>';
         return;
     }
 
@@ -113,8 +168,8 @@ socket.on('lobbyList', (list) => {
         const row = document.createElement('div');
         row.className = 'lobby-entry';
         row.innerHTML = `
-            <div><strong>${item.host}'S SECTOR</strong> [${item.id}]</div>
-            <button class="action-btn" data-id="${item.id}" style="padding: 2px 8px;">ENGAGE</button>
+            <div><strong>${item.host}'S SECTOR</strong> [${item.playerCount}/2]</div>
+            <button class="action-btn" data-id="${item.id}" style="padding: 2px 8px;">DOCK</button>
         `;
         row.querySelector('button').onclick = () => socket.emit('joinLobby', item.id);
         lobbyList.appendChild(row);
@@ -163,7 +218,7 @@ socket.on('gameStarted', (data) => {
 });
 
 // ==========================================
-// 2. COORDINATES & HITBOXES
+// 3. COORDINATES & HITBOXES
 // ==========================================
 function screenToWorld(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
@@ -204,15 +259,12 @@ function executeAttack(fromIslandId, toIslandId) {
 
 function selectIsland(isle) {
     selectedIslandId = isle ? isle.id : null;
-    if (isle) {
-        showArmory(isle);
-    } else {
-        showStandby();
-    }
+    if (isle) showArmory(isle);
+    else showStandby();
 }
 
 // ==========================================
-// 3. MOUSE / CLICK-TO-ATTACK
+// 4. MOUSE & DRAG / CLICK-TO-ATTACK
 // ==========================================
 canvas.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
@@ -260,7 +312,6 @@ window.addEventListener('mouseup', (e) => {
 
     isPanning = false;
 
-    // Single-Click / Tap to attack
     if (moveDist < 8) {
         if (target) {
             if (target.owner === myId) {
@@ -291,7 +342,7 @@ canvas.addEventListener('wheel', (e) => {
 });
 
 // ==========================================
-// 4. TOUCH & PINCH-ZOOM
+// 5. TOUCH & PINCH-ZOOM
 // ==========================================
 canvas.addEventListener('touchstart', (e) => {
     if (e.touches.length === 1) {
@@ -389,7 +440,7 @@ canvas.addEventListener('touchend', (e) => {
 });
 
 // ==========================================
-// 5. SOCKET EVENTS
+// 6. SOCKET SYNCHRONIZATION
 // ==========================================
 socket.on('scoutUpdate', (scoutData) => {
     scout = scoutData;
@@ -468,7 +519,7 @@ socket.on('gameOver', (winner) => {
 });
 
 // ==========================================
-// 6. UI BUTTON WIRING
+// 7. HUD & BUTTON WIRING
 // ==========================================
 document.getElementById('auto-scout-btn').onclick = () => {
     socket.emit('toggleAutoScout', !autoScoutEnabled);
@@ -531,9 +582,6 @@ function renderScores() {
     document.getElementById('score-bar-p2').style.width = `${p2Pct}%`;
 }
 
-// ==========================================
-// 7. BOTTOM PANEL SWAPPING LOGIC
-// ==========================================
 const standbyView = document.getElementById('standby-view');
 const armoryView = document.getElementById('armory-view');
 document.getElementById('close-inspector-btn').onclick = () => selectIsland(null);
@@ -587,7 +635,6 @@ function render(now) {
     const dt = Math.min(0.1, (now - lastTime) / 1000);
     lastTime = now;
 
-    // Keyboard Pan
     let moveX = 0;
     let moveY = 0;
     if (keysDown.has('KeyW') || keysDown.has('ArrowUp')) moveY -= 1;
@@ -612,7 +659,7 @@ function render(now) {
     ctx.scale(camera.zoom, camera.zoom);
     ctx.translate(-camera.x, -camera.y);
 
-    // Sectors
+    // 1. Sectors
     for (let sx = 0; sx < MAP_SECTORS; sx++) {
         for (let sy = 0; sy < MAP_SECTORS; sy++) {
             const key = `${sx}_${sy}`;
@@ -647,7 +694,6 @@ function render(now) {
         }
     }
 
-    // Sea Perimeter
     ctx.strokeStyle = 'rgba(0, 217, 255, 0.35)';
     ctx.lineWidth = 2;
     ctx.strokeRect(0, 0, MAP_SECTORS * SECTOR_SIZE, MAP_SECTORS * SECTOR_SIZE);
@@ -655,7 +701,7 @@ function render(now) {
     const activeSelected = selectedIslandId ? islandLookup.get(selectedIslandId) : null;
     const sourceIsland = dragSourceId ? islandLookup.get(dragSourceId) : activeSelected;
 
-    // Range Ring
+    // 2. Nautical Range Indicator
     if (sourceIsland && sourceIsland.owner === myId) {
         ctx.save();
         ctx.beginPath();
@@ -669,20 +715,20 @@ function render(now) {
         ctx.restore();
     }
 
-    // Islands
+    // 3. Draw All Discovered Islands
     for (const [id, isle] of islandLookup) {
         drawIsland(isle);
     }
 
-    // Voyages
+    // 4. Draw Voyages with Strict Fog of War Culling
     drawVoyagesAndAlerts();
 
-    // Attack Line
+    // 5. Draw Attack Vector
     if (isDraggingAttack && sourceIsland) {
         drawAttackArrow(sourceIsland, dragCurrentPos.x, dragCurrentPos.y);
     }
 
-    // Scout Ship
+    // 6. Draw Scout Vessel
     drawScoutVessel();
 
     ctx.restore();
@@ -696,20 +742,27 @@ function render(now) {
     requestAnimationFrame(render);
 }
 
+// Dedicated Island Rendering (Explicit M1 / M2 labels & Golden border for Mines)
 function drawIsland(isle) {
     const isMine = (isle.owner === myId);
     const isEnemy = (isle.owner !== null && isle.owner !== myId);
+    const isGoldMine = (isle.type === 'MINE');
     const isSelected = (selectedIslandId === isle.id);
     const radius = getIslandRadius(isle);
 
     ctx.beginPath();
     ctx.arc(isle.x, isle.y, radius, 0, Math.PI * 2);
+
+    // Mine background tint is golden if unowned
     ctx.fillStyle = isMine 
         ? 'rgba(0, 255, 119, 0.15)' 
-        : isEnemy ? 'rgba(255, 59, 59, 0.15)' : 'rgba(25, 40, 55, 0.85)';
+        : isEnemy 
+            ? 'rgba(255, 59, 59, 0.15)' 
+            : (isGoldMine ? 'rgba(245, 176, 65, 0.18)' : 'rgba(25, 40, 55, 0.85)');
     ctx.fill();
 
-    const themeColor = isMine ? '#00ff77' : isEnemy ? '#ff3b3b' : '#7f93a5';
+    // Unowned gold mines glow golden (#f5b041)
+    const themeColor = isMine ? '#00ff77' : (isEnemy ? '#ff3b3b' : (isGoldMine ? '#f5b041' : '#7f93a5'));
     ctx.strokeStyle = themeColor;
     ctx.lineWidth = isMine ? 2.5 : (radius >= 80 ? 3.0 : 1.5);
     ctx.stroke();
@@ -739,10 +792,12 @@ function drawIsland(isle) {
 
     ctx.textAlign = 'center';
 
+    // Label Rendering (Explicit M1/M2 for small mining islands)
     if (radius <= 10) {
         ctx.fillStyle = themeColor;
         ctx.font = 'bold 9px "Share Tech Mono", monospace';
-        ctx.fillText(`T${isle.level}`, isle.x, isle.y - radius - 5);
+        const tag = isGoldMine ? `🪙M${isle.level}` : `T${isle.level}`;
+        ctx.fillText(tag, isle.x, isle.y - radius - 5);
         ctx.fillText(`${isle.population}`, isle.x, isle.y + radius + 11);
     } else {
         if (isle.gold > 0) {
@@ -754,7 +809,7 @@ function drawIsland(isle) {
         ctx.fillStyle = themeColor;
         const badgeSize = Math.min(24, 10 + Math.floor(radius * 0.2));
         ctx.font = `bold ${badgeSize}px "Rajdhani", sans-serif`;
-        const label = isle.type === 'MINE' ? `⛏️M${isle.level}` : `T${isle.level}`;
+        const label = isGoldMine ? `⛏️M${isle.level}` : `T${isle.level}`;
         ctx.fillText(label, isle.x, isle.y + badgeSize * 0.35);
 
         ctx.font = 'bold 11px "Share Tech Mono", monospace';
@@ -805,38 +860,33 @@ function drawAttackArrow(source, tx, ty) {
     ctx.fillText(`Troops: ${sent} ➔ ${estimatedArrive} (${efficiency}%) | Gold: ${Math.floor(source.gold * sendGoldRatio)}`, tx + 14, ty - 8);
 }
 
+// Strict Fog of War Culling: Never draw enemy fleets moving inside fog
 function drawVoyagesAndAlerts() {
     const now = Date.now();
 
     for (const [id, v] of activeVoyages) {
+        const isMine = (v.owner === myId);
+        const targetIsland = islandLookup.get(v.toId);
+        const isAttackingMyIsland = (targetIsland && targetIsland.owner === myId && !isMine);
+
         const remainingMs = Math.max(0, v.arrivalTime - now);
         const remainingSec = (remainingMs / 1000).toFixed(1);
         const progress = Math.min(1.0, (now - v.startTime) / v.duration);
 
         const curX = v.startX + (v.targetX - v.startX) * progress;
         const curY = v.startY + (v.targetY - v.startY) * progress;
-        const isMine = (v.owner === myId);
 
-        ctx.beginPath();
-        ctx.setLineDash([4, 4]);
-        ctx.moveTo(v.startX, v.startY);
-        ctx.lineTo(curX, curY);
-        ctx.strokeStyle = isMine ? 'rgba(0, 255, 119, 0.4)' : 'rgba(255, 59, 59, 0.4)';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        ctx.setLineDash([]);
+        const curSectorKey = `${Math.floor(curX / SECTOR_SIZE)}_${Math.floor(curY / SECTOR_SIZE)}`;
+        const isCurrentPosInFog = !discoveredSectors.has(curSectorKey);
 
-        ctx.beginPath();
-        ctx.arc(curX, curY, 5, 0, Math.PI * 2);
-        ctx.fillStyle = isMine ? '#00ff77' : '#ff3b3b';
-        ctx.fill();
+        // FOG OF WAR FILTER:
+        // If an enemy attack is inside uncharted fog and NOT aimed at my island, CULL IT COMPLETELY!
+        if (!isMine && !isAttackingMyIsland && isCurrentPosInFog) {
+            continue;
+        }
 
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 10px "Share Tech Mono", monospace';
-        ctx.fillText(`${v.effectivePop}`, curX + 8, curY + 3);
-
-        const targetIsland = islandLookup.get(v.toId);
-        if (targetIsland && targetIsland.owner === myId && !isMine) {
+        // Radar Alert: Only show if an enemy is attacking MY island
+        if (isAttackingMyIsland) {
             ctx.save();
             ctx.beginPath();
             ctx.setLineDash([8, 8]);
@@ -867,6 +917,29 @@ function drawVoyagesAndAlerts() {
             ctx.textAlign = 'left';
             ctx.restore();
         }
+
+        // Trajectory line: Only drawn if origin is in charted waters or it is my own fleet
+        const isOriginInFog = !discoveredSectors.has(`${Math.floor(v.startX / SECTOR_SIZE)}_${Math.floor(v.startY / SECTOR_SIZE)}`);
+        if (isMine || (!isOriginInFog && !isCurrentPosInFog)) {
+            ctx.beginPath();
+            ctx.setLineDash([4, 4]);
+            ctx.moveTo(v.startX, v.startY);
+            ctx.lineTo(curX, curY);
+            ctx.strokeStyle = isMine ? 'rgba(0, 255, 119, 0.4)' : 'rgba(255, 59, 59, 0.4)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // Fleet Marker
+        ctx.beginPath();
+        ctx.arc(curX, curY, 5, 0, Math.PI * 2);
+        ctx.fillStyle = isMine ? '#00ff77' : '#ff3b3b';
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px "Share Tech Mono", monospace';
+        ctx.fillText(`${v.effectivePop}`, curX + 8, curY + 3);
     }
 }
 

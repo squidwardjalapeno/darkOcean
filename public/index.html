@@ -5,24 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Dark Ocean // Tactical Command</title>
     
-    <!-- Google Fonts for Tactical Sci-Fi UI -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 
-    <!-- EMBEDDED STYLES: Guarantees 100% load with zero 404 errors -->
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
             --bg-base: #02060e;
-            --bg-sidebar: #050d1a;
             --bg-panel: #071526;
-            --bg-panel-sub: #030a14;
             --border-dim: #10253d;
             --border-bright: #1c436d;
             --border-cyan: #00d9ff;
@@ -57,9 +49,6 @@
             position: relative;
         }
 
-        /* ==========================================
-           1. LEFT TACTICAL SIDEBAR (280px Fixed)
-           ========================================== */
         #tactical-sidebar {
             width: 280px;
             min-width: 280px;
@@ -150,7 +139,6 @@
             box-shadow: 0 0 6px var(--neon-green);
         }
 
-        /* Territory Score Bar */
         .score-row {
             display: flex;
             justify-content: space-between;
@@ -199,7 +187,6 @@
             z-index: 2;
         }
 
-        /* Fleet Force & Gold Buttons */
         .sub-tag {
             font-size: 9px;
             font-family: var(--font-mono);
@@ -207,10 +194,7 @@
             margin-bottom: 3px;
         }
 
-        .btn-row {
-            display: flex;
-            gap: 3px;
-        }
+        .btn-row { display: flex; gap: 3px; }
 
         .btn-opt {
             flex: 1;
@@ -244,12 +228,9 @@
             box-shadow: 0 0 6px rgba(245, 176, 65, 0.4);
         }
 
-        /* ==========================================
-           2. DYNAMIC BOTTOM PANEL (SWAPS IN-PLACE)
-           ========================================== */
         #bottom-dock {
             flex: 1;
-            min-height: 0; /* Prevents push down */
+            min-height: 0;
             background: rgba(5, 16, 29, 0.85);
             border: 1px solid var(--border-bright);
             padding: 8px;
@@ -259,7 +240,6 @@
             overflow: hidden;
         }
 
-        /* Standby Radar Scope */
         #standby-view {
             display: flex;
             flex-direction: column;
@@ -325,9 +305,8 @@
             padding: 0 8px;
         }
 
-        /* Active Island Armory */
         #armory-view {
-            display: none; /* Managed by JS */
+            display: none;
             flex-direction: column;
             height: 100%;
         }
@@ -403,21 +382,9 @@
             align-items: center;
         }
 
-        .up-detail {
-            display: flex;
-            flex-direction: column;
-        }
-
-        .up-name {
-            font-size: 10px;
-            font-weight: 700;
-        }
-
-        .up-cost {
-            font-size: 9px;
-            font-family: var(--font-mono);
-            color: var(--gold);
-        }
+        .up-detail { display: flex; flex-direction: column; }
+        .up-name { font-size: 10px; font-weight: 700; }
+        .up-cost { font-size: 9px; font-family: var(--font-mono); color: var(--gold); }
 
         .action-btn {
             background: #09213a;
@@ -450,9 +417,6 @@
             color: var(--neon-green);
         }
 
-        /* ==========================================
-           3. RIGHT OCEAN MAP VIEWPORT (Full Screen)
-           ========================================== */
         #viewport-container {
             flex: 1;
             height: 100vh;
@@ -461,15 +425,8 @@
             background-color: var(--bg-base);
         }
 
-        canvas#viewport {
-            display: block;
-            width: 100%;
-            height: 100%;
-        }
+        canvas#viewport { display: block; width: 100%; height: 100%; }
 
-        /* ==========================================
-           4. MODALS (NAME / LOBBY / VICTORY)
-           ========================================== */
         .modal-layer {
             position: fixed;
             inset: 0;
@@ -486,7 +443,7 @@
             border-top: 3px solid var(--border-cyan);
             padding: 24px 30px;
             text-align: center;
-            min-width: 320px;
+            min-width: 340px;
             box-shadow: 0 0 35px rgba(0, 217, 255, 0.15);
         }
 
@@ -526,7 +483,7 @@
         }
 
         .lobby-box {
-            max-height: 170px;
+            max-height: 160px;
             overflow-y: auto;
             background: #020710;
             border: 1px solid var(--border-dim);
@@ -547,6 +504,28 @@
 
         .lobby-entry:last-child { border-bottom: none; }
 
+        .commander-slot {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: #020710;
+            border: 1px solid var(--border-dim);
+            margin-bottom: 6px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+        }
+
+        .error-banner {
+            background: rgba(255, 59, 59, 0.15);
+            border: 1px solid var(--neon-red);
+            color: var(--neon-red);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            padding: 6px;
+            margin: 8px 0;
+            text-align: center;
+        }
+
         .hidden { display: none !important; }
     </style>
 </head>
@@ -564,37 +543,53 @@
             </div>
         </div>
 
-        <!-- 2. LOBBY SELECTOR MODAL -->
+        <!-- 2. LOBBY DIRECTORY MODAL -->
         <div id="lobby-modal" class="modal-layer hidden">
             <div class="modal-window" style="min-width: 440px;">
                 <div class="card-tag">SYS//COMM-LINK ACTIVE</div>
                 <div class="modal-title">FREQUENCY DIRECTORY</div>
                 <div class="modal-desc">STATION: <span id="display-callsign" style="color: var(--gold);"></span></div>
 
+                <div id="lobby-error-msg" class="error-banner hidden"></div>
+
                 <div style="display: flex; gap: 8px; margin-bottom: 10px;">
                     <button id="create-lobby-btn" class="action-btn" style="flex: 1;">+ CREATE 2P SECTOR</button>
                     <button id="refresh-lobbies-btn" class="action-btn">↻ REFRESH</button>
                 </div>
 
-                <div id="lobby-list" class="lobby-box">
-                    <div style="padding: 12px; text-align: center; color: var(--text-dim); font-size: 11px;">Scanning frequencies...</div>
+                <!-- Lobby Active List View -->
+                <div id="lobby-directory-view">
+                    <div id="lobby-list" class="lobby-box">
+                        <div style="padding: 12px; text-align: center; color: var(--text-dim); font-size: 11px;">Scanning frequencies...</div>
+                    </div>
                 </div>
 
-                <div id="waiting-notice" class="hidden" style="color: var(--gold); font-family: var(--font-mono); font-size: 11px; margin-top: 10px;">
-                    SECTOR OPEN. AWAITING SECOND COMMANDER...
+                <!-- Active Docked Room View (1/2 or 2/2) -->
+                <div id="lobby-room-view" class="hidden">
+                    <div class="card-tag" style="margin-top: 8px;">DOCKED COMMANDERS:</div>
+                    <div class="commander-slot">
+                        <span>COMMANDER 1 [HOST]:</span>
+                        <strong id="slot-p1" style="color: var(--neon-green);">AWAITING...</strong>
+                    </div>
+                    <div class="commander-slot">
+                        <span>COMMANDER 2 [OPPONENT]:</span>
+                        <strong id="slot-p2" style="color: var(--gold);">AWAITING...</strong>
+                    </div>
+
+                    <button id="launch-match-btn" class="action-btn" style="width: 100%; padding: 10px 0; margin-top: 10px; font-size: 13px;">
+                        LAUNCH MATCH [1/2]
+                    </button>
                 </div>
             </div>
         </div>
 
-        <!-- 3. IN-GAME WORKSPACE (SIDEBAR + FULL RIGHT OCEAN) -->
+        <!-- 3. IN-GAME WORKSPACE -->
         <aside id="tactical-sidebar" class="hidden">
-            <!-- Header -->
             <div class="brand-row">
                 <div class="brand-text">DARK OCEAN</div>
                 <div class="comm-tag"><span class="live-dot"></span> <span id="hud-my-name">YOU</span> vs <span id="hud-enemy-name">ENEMY</span></div>
             </div>
 
-            <!-- Radar Control -->
             <div class="card">
                 <div class="card-tag">SYS//RADAR SENSOR</div>
                 <div id="scout-status" class="radar-status">RADAR: DOCKED [0, 0]</div>
@@ -602,7 +597,6 @@
                 <button id="auto-scout-btn" class="action-btn toggle">AUTO-SCOUT: OFF</button>
             </div>
 
-            <!-- Territory Control (>50% Win) -->
             <div class="card">
                 <div class="card-tag">SYS//CONTROL SCORE [&gt;50% TO WIN]</div>
                 <div class="score-row">
@@ -616,7 +610,6 @@
                 </div>
             </div>
 
-            <!-- Force & Gold Deploy Selectors -->
             <div class="card">
                 <div class="card-tag">SYS//EXPEDITION PAYLOAD</div>
                 <div class="sub-tag">TROOPS TO DEPLOY:</div>
@@ -634,9 +627,7 @@
                 </div>
             </div>
 
-            <!-- Dynamic Bottom Swapping Container -->
             <div id="bottom-dock">
-                <!-- VIEW 1: STANDBY (Default) -->
                 <div id="standby-view">
                     <div class="radar-scope">
                         <div class="cross-h"></div>
@@ -644,10 +635,9 @@
                         <div class="radar-sweep"></div>
                     </div>
                     <div class="standby-title">CITADEL ARMORY STANDBY</div>
-                    <div class="standby-desc">Select any charted island on the nautical chart to deploy dockyard upgrades.</div>
+                    <div class="standby-desc">Select any charted island to deploy dockyard upgrades.</div>
                 </div>
 
-                <!-- VIEW 2: ACTIVE ARMORY (Swaps in when island is selected) -->
                 <div id="armory-view">
                     <div class="armory-top">
                         <div>
@@ -692,7 +682,7 @@
             </div>
         </aside>
 
-        <!-- 4. RIGHT OCEAN CANVAS CONTAINER (Takes ALL remaining space) -->
+        <!-- 4. RIGHT OCEAN CANVAS -->
         <main id="viewport-container">
             <canvas id="viewport"></canvas>
         </main>
