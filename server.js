@@ -561,36 +561,39 @@ io.on('connection', (socket) => {
     });
 
     socket.on('upgradeIsland', (data) => {
-        if (!playerSession || !playerSession.gameId) return;
-        const game = games.get(playerSession.gameId);
-        if (!game || game.gameOver) return;
+    const gameId = socketToGameId.get(socket.id);
+    if (!gameId) return;
 
-        const isle = game.allIslands.get(data.islandId);
-        if (!isle || isle.owner !== playerSession.playerId) return;
+    const game = games.get(gameId);
+    if (!game || game.gameOver) return;
 
-        const upgradeType = data.type;
-        const currentLvl = isle.upgrades[upgradeType] || 0;
-        if (currentLvl >= 5) return;
+    const isle = game.allIslands.get(data.islandId);
+    if (!isle || isle.owner !== socket.id) return;
 
-        const cost = Math.floor(50 * Math.pow(1.6, currentLvl));
-        if (isle.gold < cost) return;
+    const upgradeType = data.type; // 'speed', 'range', 'defense'
+    const currentLvl = isle.upgrades[upgradeType] || 0;
+    if (currentLvl >= 5) return;
 
-        isle.gold -= cost;
-        isle.upgrades[upgradeType] = currentLvl + 1;
+    // 2x per level scaling: Base 50 * 2^currentLvl * island tier level
+    const cost = Math.floor(50 * Math.pow(2, currentLvl) * isle.level);
+    if (isle.gold < cost) return;
 
-        if (upgradeType === 'speed') isle.speed = Math.round(isle.speed * 1.15);
-        if (upgradeType === 'range') isle.range = Math.round(isle.range * 1.20);
-        if (upgradeType === 'defense') isle.defense = Number((isle.defense + 0.25).toFixed(2));
+    isle.gold -= cost;
+    isle.upgrades[upgradeType] = currentLvl + 1;
 
-        io.to(game.id).emit('islandUpgraded', {
-            id: isle.id,
-            gold: isle.gold,
-            speed: isle.speed,
-            range: isle.range,
-            defense: isle.defense,
-            upgrades: isle.upgrades
-        });
+    if (upgradeType === 'speed') isle.speed = Math.round(isle.speed * 1.15);
+    if (upgradeType === 'range') isle.range = Math.round(isle.range * 1.20);
+    if (upgradeType === 'defense') isle.defense = Number((isle.defense + 0.25).toFixed(2));
+
+    io.to(gameId).emit('islandUpgraded', {
+        id: isle.id,
+        gold: isle.gold,
+        speed: isle.speed,
+        range: isle.range,
+        defense: isle.defense,
+        upgrades: isle.upgrades
     });
+});
 
     socket.on('disconnect', () => {
         if (!playerSession) return;
