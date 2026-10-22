@@ -3,145 +3,205 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Dark Ocean</title>
+    <title>Dark Ocean // Tactical Command</title>
+    <!-- Sci-Fi Tactical Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="app-viewport">
+    <div id="app-container">
+
         <!-- 1. NAME CALLSIGN MODAL -->
         <div id="name-modal" class="modal-overlay">
             <div class="modal-card">
+                <div class="terminal-tag">SYS//INITIALIZE</div>
                 <div class="modal-header">DARK OCEAN</div>
-                <div class="modal-sub">TACTICAL RADAR CONQUEST</div>
+                <div class="modal-sub">TACTICAL RADAR NETWORK</div>
                 <div class="input-wrap">
-                    <label>COMMANDER CALLSIGN (MAX 4):</label>
+                    <label>COMMANDER CALLSIGN [MAX 4]:</label>
                     <input type="text" id="player-name-input" maxlength="4" placeholder="NEMO" autofocus autocomplete="off" />
                 </div>
-                <button id="submit-name-btn" class="glow-btn">ENTER ADMIRALTY</button>
+                <button id="submit-name-btn" class="sci-btn primary">AUTHORIZE ACCESS</button>
             </div>
         </div>
 
         <!-- 2. LOBBY SELECTOR MODAL -->
         <div id="lobby-modal" class="modal-overlay hidden">
             <div class="modal-card lobby-card">
-                <div class="modal-header">NAUTICAL COMM-LINK</div>
-                <div class="callsign-display">COMMANDER: <span id="display-callsign"></span></div>
+                <div class="terminal-tag">SYS//COMM-LINK ACTIVE</div>
+                <div class="modal-header">FREQUENCY DIRECTORY</div>
+                <div class="callsign-display">STATION: <span id="display-callsign"></span></div>
 
                 <div class="lobby-action-row">
-                    <button id="create-lobby-btn" class="glow-btn">+ CREATE 2P LOBBY</button>
-                    <button id="refresh-lobbies-btn" class="subtle-btn">↻ REFRESH</button>
+                    <button id="create-lobby-btn" class="sci-btn primary">+ ESTABLISH 2P SECTOR</button>
+                    <button id="refresh-lobbies-btn" class="sci-btn secondary">↻ REFRESH</button>
                 </div>
 
                 <div class="lobby-list-container">
-                    <div class="lobby-list-title">ACTIVE OCEAN FREQUENCIES:</div>
+                    <div class="lobby-list-title">OPEN OCEAN FREQUENCIES:</div>
                     <div id="lobby-list" class="lobby-list">
-                        <div class="empty-notice">Scanning for open frequencies...</div>
+                        <div class="empty-notice">Scanning frequencies...</div>
                     </div>
                 </div>
 
                 <div id="waiting-notice" class="waiting-notice hidden">
-                    <div class="spinner"></div>
-                    <div>LOBBY CREATED. WAITING FOR 2ND COMMANDER...</div>
+                    <div class="radar-ping"></div>
+                    <div>SECTOR OPEN. AWAITING SECOND COMMANDER...</div>
                 </div>
             </div>
         </div>
 
-        <!-- 3. IN-GAME CANVAS -->
-        <canvas id="viewport"></canvas>
+        <!-- 3. IN-GAME LAYOUT: LEFT SIDEBAR + RIGHT OCEAN VIEWPORT -->
+        <div id="game-workspace" class="hidden">
 
-        <!-- 4. TOP HUD (SCORE, LEADERBOARD, RADAR) -->
-        <div id="game-hud" class="hidden">
-            <!-- Left: Radar Status -->
-            <div class="hud-panel left-panel">
-                <div class="hud-title">NAUTICAL RADAR [10×10]</div>
-                <div id="scout-status">Radar: Docked</div>
-                <div id="scout-progress-bar"><div id="progress-fill"></div></div>
-                <button id="auto-scout-btn" class="hud-btn">AUTO-SCOUT: OFF</button>
-            </div>
+            <!-- LEFT TACTICAL CONSOLE -->
+            <aside id="tactical-sidebar">
+                <!-- Header Banner -->
+                <div class="sidebar-header">
+                    <div class="brand-title">DARK OCEAN</div>
+                    <div class="comm-id"><span class="status-dot"></span> <span id="hud-my-name">YOU</span> vs <span id="hud-enemy-name">ENEMY</span></div>
+                </div>
 
-            <!-- Center: Victory Points Bar -->
-            <div class="hud-panel center-panel">
-                <div class="hud-title">TERRITORY SCORE (&gt;50% TO WIN)</div>
-                <div class="score-display">
-                    <span id="score-p1" class="score-tag p1">YOU: 0 pts (0%)</span>
-                    <span class="score-divider">VS</span>
-                    <span id="score-p2" class="score-tag p2">ENEMY: 0 pts (0%)</span>
+                <!-- Section A: 10x10 Radar Status -->
+                <div class="sci-panel">
+                    <div class="panel-tag">SYS//CHARTING RADAR</div>
+                    <div id="scout-status" class="radar-status-text">RADAR: DOCKED [0, 0]</div>
+                    <div class="progress-bar-shell">
+                        <div id="progress-fill"></div>
+                    </div>
+                    <button id="auto-scout-btn" class="sci-btn toggle-btn">AUTO-SCOUT: OFF</button>
                 </div>
-                <div id="score-bar-track">
-                    <div id="score-bar-p1"></div>
-                    <div id="score-bar-p2"></div>
-                </div>
-            </div>
 
-            <!-- Right: Force Send Ratio & Gold Payload -->
-            <div class="hud-panel right-panel">
-                <div class="hud-title">EXPEDITION PAYLOAD</div>
-                <div class="payload-sub">TROOPS TO DEPLOY:</div>
-                <div class="btn-group">
-                    <button class="pct-btn" data-pct="0.25">25%</button>
-                    <button class="pct-btn active" data-pct="0.50">50%</button>
-                    <button class="pct-btn" data-pct="0.75">75%</button>
-                    <button class="pct-btn" data-pct="0.90">90%</button>
+                <!-- Section B: Territory Control Tracker -->
+                <div class="sci-panel">
+                    <div class="panel-tag">SYS//TERRITORY CONTROL [>50% WIN]</div>
+                    <div class="score-labels">
+                        <span id="score-p1" class="score-p1">YOU: 0 pts (0%)</span>
+                        <span id="score-p2" class="score-p2">ENEMY: 0 pts (0%)</span>
+                    </div>
+                    <div class="score-bar-shell">
+                        <div id="score-bar-p1"></div>
+                        <div id="score-bar-p2"></div>
+                        <div class="threshold-marker" title="50% Majority Threshold"></div>
+                    </div>
                 </div>
-                <div class="payload-sub" style="margin-top: 6px;">GOLD TO TRANSPORT:</div>
-                <div class="btn-group">
-                    <button class="gold-pct-btn active" data-gold="0">0%</button>
-                    <button class="gold-pct-btn" data-gold="0.50">50%</button>
-                    <button class="gold-pct-btn" data-gold="1.0">100%</button>
+
+                <!-- Section C: Fleet Deployment Payload -->
+                <div class="sci-panel">
+                    <div class="panel-tag">SYS//EXPEDITION PAYLOAD</div>
+                    <div class="payload-sub">TROOPS TO STRIKE:</div>
+                    <div class="btn-group">
+                        <button class="pct-btn" data-pct="0.25">25%</button>
+                        <button class="pct-btn active" data-pct="0.50">50%</button>
+                        <button class="pct-btn" data-pct="0.75">75%</button>
+                        <button class="pct-btn" data-pct="0.90">90%</button>
+                    </div>
+
+                    <div class="payload-sub" style="margin-top: 8px;">TREASURY TRANSPORT:</div>
+                    <div class="btn-group">
+                        <button class="gold-pct-btn active" data-gold="0">0%</button>
+                        <button class="gold-pct-btn" data-gold="0.50">50%</button>
+                        <button class="gold-pct-btn" data-gold="1.0">100%</button>
+                    </div>
                 </div>
-            </div>
+
+                <!-- Section D: Dynamic Bottom Swap Section (Inspector or Standby) -->
+                <div id="bottom-dock-container" class="sci-panel flex-fill">
+                    
+                    <!-- D1. Standby Telemetry (Shown when no island is selected) -->
+                    <div id="standby-dock" class="dock-subview">
+                        <div class="panel-tag">SYS//ARMORY TELEMETRY</div>
+                        <div class="tactical-radar-graphic">
+                            <div class="crosshair-h"></div>
+                            <div class="crosshair-v"></div>
+                            <div class="scanner-sweep"></div>
+                        </div>
+                        <div class="standby-hint">
+                            <div>NO HARBOR SELECTED</div>
+                            <p>Select any friendly island on nautical chart to deploy dockyard upgrades and review citadel telemetry.</p>
+                        </div>
+                    </div>
+
+                    <!-- D2. Island Armory Inspector (Swaps in when an island is clicked) -->
+                    <div id="active-dock" class="dock-subview hidden">
+                        <div class="dock-header">
+                            <div>
+                                <span class="panel-tag">CITADEL TELEMETRY</span>
+                                <div id="inspector-name" class="island-title">SANDBAR [0:0]</div>
+                            </div>
+                            <button id="close-inspector-btn" class="close-dock-btn" title="Deselect Island">&times;</button>
+                        </div>
+
+                        <div class="specs-grid">
+                            <div class="spec-cell">
+                                <span class="spec-label">TYPE</span>
+                                <span id="stat-type" class="spec-val">NORMAL</span>
+                            </div>
+                            <div class="spec-cell">
+                                <span class="spec-label">POINTS</span>
+                                <span id="stat-points" class="spec-val green">1 pt</span>
+                            </div>
+                            <div class="spec-cell">
+                                <span class="spec-label">POPULATION</span>
+                                <span id="stat-pop" class="spec-val">150 / 150</span>
+                            </div>
+                            <div class="spec-cell">
+                                <span class="spec-label">TREASURY</span>
+                                <span id="stat-gold" class="spec-val gold">🪙 50</span>
+                            </div>
+                        </div>
+
+                        <div class="upgrades-container">
+                            <div class="upgrades-title">DOCKYARD ARMAMENTS</div>
+
+                            <div class="upgrade-card">
+                                <div class="upgrade-info">
+                                    <div class="upgrade-label">⚡ VOYAGE SPEED: <strong id="up-speed-val">22</strong></div>
+                                    <div class="upgrade-cost">Cost: <span id="up-speed-cost">50</span> 🪙</div>
+                                </div>
+                                <button id="buy-speed-btn" class="sci-btn mini">UPGRADE</button>
+                            </div>
+
+                            <div class="upgrade-card">
+                                <div class="upgrade-info">
+                                    <div class="upgrade-label">🧭 REACH RANGE: <strong id="up-range-val">500</strong></div>
+                                    <div class="upgrade-cost">Cost: <span id="up-range-cost">50</span> 🪙</div>
+                                </div>
+                                <button id="buy-range-btn" class="sci-btn mini">UPGRADE</button>
+                            </div>
+
+                            <div class="upgrade-card">
+                                <div class="upgrade-info">
+                                    <div class="upgrade-label">🛡️ CITADEL ARMOR: <strong id="up-defense-val">1.0</strong></div>
+                                    <div class="upgrade-cost">Cost: <span id="up-defense-cost">50</span> 🪙</div>
+                                </div>
+                                <button id="buy-defense-btn" class="sci-btn mini">UPGRADE</button>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </aside>
+
+            <!-- RIGHT OCEAN MAP CANVAS CONTAINER -->
+            <main id="viewport-container">
+                <canvas id="viewport"></canvas>
+            </main>
+
         </div>
 
-        <!-- 5. SIDE DOCKYARD INSPECTOR (ISLAND UPGRADE DRAWER) -->
-        <div id="island-inspector" class="side-drawer hidden">
-            <div class="drawer-header">
-                <span id="inspector-name">SANDBAR [0:0]</span>
-                <button id="close-inspector-btn" class="close-btn">&times;</button>
-            </div>
-            <div class="drawer-stats">
-                <div class="stat-row"><span>Type:</span> <strong id="stat-type">NORMAL</strong></div>
-                <div class="stat-row"><span>Population:</span> <strong id="stat-pop">150 / 150</strong></div>
-                <div class="stat-row"><span>Treasury Gold:</span> <strong id="stat-gold" style="color:#f1c40f;">🪙 50</strong></div>
-                <div class="stat-row"><span>Points Weight:</span> <strong id="stat-points" style="color:#00ff66;">1 pt</strong></div>
-            </div>
-
-            <div class="upgrade-section">
-                <div class="upgrade-title">DOCKYARD UPGRADES (SPEND GOLD)</div>
-
-                <div class="upgrade-row">
-                    <div>
-                        <div class="upgrade-name">⚡ VOYAGE SPEED (<span id="up-speed-val">22</span>)</div>
-                        <div class="upgrade-cost">Cost: <span id="up-speed-cost">50</span> Gold</div>
-                    </div>
-                    <button id="buy-speed-btn" class="upgrade-btn">UPGRADE</button>
-                </div>
-
-                <div class="upgrade-row">
-                    <div>
-                        <div class="upgrade-name">🧭 NAUTICAL RANGE (<span id="up-range-val">500</span>)</div>
-                        <div class="upgrade-cost">Cost: <span id="up-range-cost">50</span> Gold</div>
-                    </div>
-                    <button id="buy-range-btn" class="upgrade-btn">UPGRADE</button>
-                </div>
-
-                <div class="upgrade-row">
-                    <div>
-                        <div class="upgrade-name">🛡️ CITADEL DEFENSE (<span id="up-defense-val">1.0</span>)</div>
-                        <div class="upgrade-cost">Cost: <span id="up-defense-cost">50</span> Gold</div>
-                    </div>
-                    <button id="buy-defense-btn" class="upgrade-btn">UPGRADE</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- 6. VICTORY OVERLAY -->
+        <!-- 4. VICTORY OVERLAY -->
         <div id="game-over-modal" class="modal-overlay hidden">
             <div class="modal-card">
+                <div class="terminal-tag">SYS//OPERATION TERMINATED</div>
                 <div id="game-over-title" class="modal-header">VICTORY ACHIEVED</div>
                 <div id="game-over-desc" class="modal-sub">CONQUERED &gt;50% OF THE SEAS</div>
-                <button onclick="location.reload()" class="glow-btn">RETURN TO PORT</button>
+                <button onclick="location.reload()" class="sci-btn primary">DISENGAGE FREQUENCY</button>
             </div>
         </div>
+
     </div>
 
     <script src="/socket.io/socket.io.js"></script>

@@ -2,6 +2,7 @@
 const socket = io();
 const canvas = document.getElementById('viewport');
 const ctx = canvas.getContext('2d');
+const viewportContainer = document.getElementById('viewport-container');
 
 let myId = null;
 let myName = "CAPT";
@@ -26,7 +27,7 @@ let scout = { state: 'IDLE', currentSector: { sx: 0, sy: 0 }, targetSector: null
 let autoScoutEnabled = false;
 
 // Selection & Attack State
-let selectedIslandId = null;       // Active island for upgrades & tap-to-attack origin
+let selectedIslandId = null;
 let sendTroopRatio = 0.50;
 let sendGoldRatio = 0.0;
 let isDraggingAttack = false;
@@ -34,21 +35,27 @@ let dragSourceId = null;
 let dragCurrentPos = { x: 0, y: 0 };
 let pointerDownPos = { x: 0, y: 0 };
 
-// Touch tracking for pinch-to-zoom & mobile panning
+// Touch tracking
 let touchStartDist = 0;
 let touchStartZoom = 0.75;
 let isPanning = false;
 let lastPanPos = { x: 0, y: 0 };
 
-// Island Radii
+// Exact power-of-2 island sizing (Level 1: 5px -> Level 7: 320px)
 function getIslandRadius(isle) {
     const radii = [0, 5, 10, 20, 40, 80, 160, 320];
     return radii[isle.level] || 5;
 }
 
+// Keep canvas resolution synced to the right-hand viewport container
 function resize() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    if (viewportContainer) {
+        canvas.width = viewportContainer.clientWidth;
+        canvas.height = viewportContainer.clientHeight;
+    } else {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
 }
 window.addEventListener('resize', resize);
 resize();
@@ -58,7 +65,7 @@ resize();
 // ==========================================
 const nameModal = document.getElementById('name-modal');
 const lobbyModal = document.getElementById('lobby-modal');
-const gameHud = document.getElementById('game-hud');
+const gameWorkspace = document.getElementById('game-workspace');
 const nameInput = document.getElementById('player-name-input');
 const submitNameBtn = document.getElementById('submit-name-btn');
 const createLobbyBtn = document.getElementById('create-lobby-btn');
@@ -106,10 +113,10 @@ socket.on('lobbyList', (list) => {
         const row = document.createElement('div');
         row.className = 'lobby-item';
         row.innerHTML = `
-            <div><strong>${item.host}'S LOBBY</strong> [${item.id}]</div>
-            <button class="join-btn" data-id="${item.id}">ENGAGE</button>
+            <div><strong>${item.host}'S SECTOR</strong> [${item.id}]</div>
+            <button class="sci-btn mini" data-id="${item.id}">ENGAGE</button>
         `;
-        row.querySelector('.join-btn').onclick = () => socket.emit('joinLobby', item.id);
+        row.querySelector('button').onclick = () => socket.emit('joinLobby', item.id);
         lobbyList.appendChild(row);
     });
 });
@@ -117,7 +124,8 @@ socket.on('lobbyList', (list) => {
 socket.on('gameStarted', (data) => {
     nameModal.classList.add('hidden');
     lobbyModal.classList.add('hidden');
-    gameHud.classList.remove('hidden');
+    gameWorkspace.classList.remove('hidden');
+    resize();
 
     myId = data.myId;
     SECTOR_SIZE = data.sectorSize;
@@ -131,6 +139,9 @@ socket.on('gameStarted', (data) => {
         enemyId = other.id;
         enemyName = other.name;
     }
+
+    document.getElementById('hud-my-name').innerText = myName;
+    document.getElementById('hud-enemy-name').innerText = enemyName;
 
     discoveredSectors.clear();
     islandLookup.clear();
@@ -148,10 +159,11 @@ socket.on('gameStarted', (data) => {
     }
 
     updateHUD();
+    renderScores();
 });
 
 // ==========================================
-// 2. COORDINATES & TOUCH-SAFE HITBOXES
+// 2. COORDINATES & HITBOXES
 // ==========================================
 function screenToWorld(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
@@ -169,7 +181,6 @@ function findIslandNear(wx, wy) {
 
     for (const [id, isle] of islandLookup) {
         const radius = getIslandRadius(isle);
-        // Generous hitbox tolerance for small 5px/10px islands on touch screens
         const hitRadius = Math.max(26, radius + 12);
         const dist = Math.hypot(isle.x - wx, isle.y - wy);
 
@@ -193,14 +204,17 @@ function executeAttack(fromIslandId, toIslandId) {
 
 function selectIsland(isle) {
     selectedIslandId = isle ? isle.id : null;
-    if (isle) openInspector(isle);
-    else closeInspector();
+    if (isle) {
+        showArmory(isle);
+    } else {
+        showStandby();
+    }
 }
 
 // ==========================================
 // 3. MOUSE & DRAG / CLICK-TO-ATTACK
 // ==========================================
-window.addEventListener('mousedown', (e) => {
+canvas.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     pointerDownPos = { x: e.clientX, y: e.clientY };
     const world = screenToWorld(e.clientX, e.clientY);
@@ -234,7 +248,6 @@ window.addEventListener('mouseup', (e) => {
     const world = screenToWorld(e.clientX, e.clientY);
     const target = findIslandNear(world.x, world.y);
 
-    // 1. Handle Drag Release
     if (isDraggingAttack && dragSourceId) {
         if (target && target.id !== dragSourceId) {
             executeAttack(dragSourceId, target.id);
@@ -247,20 +260,17 @@ window.addEventListener('mouseup', (e) => {
 
     isPanning = false;
 
-    // 2. Handle Tap/Click (short click without dragging)
+    // Single-Click / Tap to attack
     if (moveDist < 8) {
         if (target) {
             if (target.owner === myId) {
-                // Clicked an owned island -> select it
                 selectIsland(target);
             } else if (selectedIslandId) {
-                // Clicked an unowned / enemy island while our island is selected -> TAP-TO-ATTACK!
                 executeAttack(selectedIslandId, target.id);
             } else {
-                openInspector(target);
+                selectIsland(target);
             }
         } else {
-            // Clicked empty ocean or fog
             const sx = Math.floor(world.x / SECTOR_SIZE);
             const sy = Math.floor(world.y / SECTOR_SIZE);
             if (sx >= 0 && sx < MAP_SECTORS && sy >= 0 && sy < MAP_SECTORS) {
@@ -268,14 +278,14 @@ window.addEventListener('mouseup', (e) => {
                 if (!discoveredSectors.has(key)) {
                     socket.emit('dispatchScout', { sx, sy });
                 } else {
-                    selectIsland(null); // Clicked charted ocean: deselect
+                    selectIsland(null);
                 }
             }
         }
     }
 });
 
-window.addEventListener('wheel', (e) => {
+canvas.addEventListener('wheel', (e) => {
     const factor = e.deltaY < 0 ? 1.1 : 0.9;
     camera.zoom = Math.max(0.12, Math.min(2.5, camera.zoom * factor));
 });
@@ -353,7 +363,6 @@ canvas.addEventListener('touchend', (e) => {
 
         isPanning = false;
 
-        // Mobile Tap action
         if (moveDist < 12) {
             if (target) {
                 if (target.owner === myId) {
@@ -361,7 +370,7 @@ canvas.addEventListener('touchend', (e) => {
                 } else if (selectedIslandId) {
                     executeAttack(selectedIslandId, target.id);
                 } else {
-                    openInspector(target);
+                    selectIsland(target);
                 }
             } else {
                 const sx = Math.floor(world.x / SECTOR_SIZE);
@@ -379,9 +388,7 @@ canvas.addEventListener('touchend', (e) => {
     }
 });
 
-// ==========================================
-// 5. KEYBOARD PANNING
-// ==========================================
+// Keyboard Pan
 const PAN_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'];
 window.addEventListener('keydown', (e) => {
     if (PAN_KEYS.includes(e.code)) {
@@ -397,7 +404,7 @@ window.addEventListener('keyup', (e) => {
 });
 
 // ==========================================
-// 6. SOCKET SYNCHRONIZATION
+// 5. SOCKET SYNCHRONIZATION
 // ==========================================
 socket.on('scoutUpdate', (scoutData) => {
     scout = scoutData;
@@ -423,7 +430,7 @@ socket.on('islandUpdated', (data) => {
         isle.population = data.population;
         isle.gold = data.gold;
         isle.owner = data.owner;
-        if (selectedIslandId === data.id) refreshInspector(isle);
+        if (selectedIslandId === data.id) refreshArmory(isle);
         renderScores();
     }
 });
@@ -436,7 +443,7 @@ socket.on('islandUpgraded', (data) => {
         isle.range = data.range;
         isle.defense = data.defense;
         isle.upgrades = data.upgrades;
-        if (selectedIslandId === data.id) refreshInspector(isle);
+        if (selectedIslandId === data.id) refreshArmory(isle);
     }
 });
 
@@ -450,7 +457,7 @@ socket.on('islandsSync', (islandsList) => {
         }
     });
     if (selectedIslandId && islandLookup.has(selectedIslandId)) {
-        refreshInspector(islandLookup.get(selectedIslandId));
+        refreshArmory(islandLookup.get(selectedIslandId));
     }
     renderScores();
 });
@@ -465,18 +472,18 @@ socket.on('gameOver', (winner) => {
 
     if (winner.id === myId) {
         title.innerText = "OCEANIC TRIUMPH!";
-        title.style.color = "#00ff66";
+        title.style.color = "#00ff77";
         desc.innerText = `YOU CONQUERED ${winner.pct}% OF THE MAP`;
     } else {
         title.innerText = "FLEET SUBJUGATED";
-        title.style.color = "#e74c3c";
+        title.style.color = "#ff3838";
         desc.innerText = `${winner.name} TOOK ${winner.pct}% OF THE SEAS`;
     }
     modal.classList.remove('hidden');
 });
 
 // ==========================================
-// 7. HUD & INSPECTOR
+// 6. HUD & EXPEDITION BUTTONS
 // ==========================================
 document.getElementById('auto-scout-btn').onclick = () => {
     socket.emit('toggleAutoScout', !autoScoutEnabled);
@@ -503,7 +510,7 @@ function updateHUD() {
     const autoBtn = document.getElementById('auto-scout-btn');
 
     if (autoScoutEnabled) {
-        autoBtn.innerText = "AUTO-SCOUT: ON";
+        autoBtn.innerText = "AUTO-SCOUT: ACTIVE";
         autoBtn.classList.add('active');
     } else {
         autoBtn.innerText = "AUTO-SCOUT: OFF";
@@ -511,11 +518,11 @@ function updateHUD() {
     }
 
     if (scout.state === 'CHARTING' && scout.targetSector) {
-        statusText.innerText = `Radar: Scanning [${scout.targetSector.sx}, ${scout.targetSector.sy}]...`;
-        statusText.style.color = '#f39c12';
+        statusText.innerText = `SCANNING [${scout.targetSector.sx}, ${scout.targetSector.sy}]...`;
+        statusText.style.color = '#f5b041';
     } else {
-        statusText.innerText = `Radar: Docked [${scout.currentSector.sx}, ${scout.currentSector.sy}]`;
-        statusText.style.color = '#00ff66';
+        statusText.innerText = `RADAR: DOCKED [${scout.currentSector.sx}, ${scout.currentSector.sy}]`;
+        statusText.style.color = '#00ff77';
         document.getElementById('progress-fill').style.width = '0%';
     }
 }
@@ -539,21 +546,26 @@ function renderScores() {
     document.getElementById('score-bar-p2').style.width = `${p2Pct}%`;
 }
 
-const inspector = document.getElementById('island-inspector');
-document.getElementById('close-inspector-btn').onclick = () => closeInspector();
+// ==========================================
+// 7. SWAPPING BOTTOM DOCKYARD ARMORY
+// ==========================================
+const standbyDock = document.getElementById('standby-dock');
+const activeDock = document.getElementById('active-dock');
+document.getElementById('close-inspector-btn').onclick = () => selectIsland(null);
 
-function closeInspector() {
-    inspector.classList.add('hidden');
+function showStandby() {
+    standbyDock.classList.remove('hidden');
+    activeDock.classList.add('hidden');
     selectedIslandId = null;
 }
 
-function openInspector(isle) {
-    selectedIslandId = isle.id;
-    inspector.classList.remove('hidden');
-    refreshInspector(isle);
+function showArmory(isle) {
+    standbyDock.classList.add('hidden');
+    activeDock.classList.remove('hidden');
+    refreshArmory(isle);
 }
 
-function refreshInspector(isle) {
+function refreshArmory(isle) {
     document.getElementById('inspector-name').innerText = isle.name;
     document.getElementById('stat-type').innerText = isle.type;
     document.getElementById('stat-pop').innerText = `${isle.population} / ${isle.maxPop}`;
@@ -590,7 +602,6 @@ function render(now) {
     const dt = Math.min(0.1, (now - lastTime) / 1000);
     lastTime = now;
 
-    // Keyboard Pan
     let moveX = 0;
     let moveY = 0;
     if (keysDown.has('KeyW') || keysDown.has('ArrowUp')) moveY -= 1;
@@ -631,7 +642,7 @@ function render(now) {
                 ctx.strokeRect(posX, posY, SECTOR_SIZE, SECTOR_SIZE);
 
                 ctx.fillStyle = '#17365d';
-                ctx.font = '11px Courier New';
+                ctx.font = '11px "Share Tech Mono", monospace';
                 ctx.fillText(`SECTOR [${sx}, ${sy}]`, posX + 14, posY + 24);
             } else {
                 ctx.fillStyle = '#02060e';
@@ -642,7 +653,7 @@ function render(now) {
                 ctx.strokeRect(posX, posY, SECTOR_SIZE, SECTOR_SIZE);
 
                 ctx.fillStyle = '#14253b';
-                ctx.font = '16px Courier New';
+                ctx.font = '16px "Share Tech Mono", monospace';
                 ctx.textAlign = 'center';
                 ctx.fillText('?', posX + SECTOR_SIZE / 2, posY + SECTOR_SIZE / 2);
                 ctx.textAlign = 'left';
@@ -650,42 +661,42 @@ function render(now) {
         }
     }
 
-    // Outer Sea Boundaries
-    ctx.strokeStyle = 'rgba(0, 255, 102, 0.3)';
+    // Outer boundary
+    ctx.strokeStyle = 'rgba(0, 229, 255, 0.35)';
     ctx.lineWidth = 2;
     ctx.strokeRect(0, 0, MAP_SECTORS * SECTOR_SIZE, MAP_SECTORS * SECTOR_SIZE);
 
     const activeSelected = selectedIslandId ? islandLookup.get(selectedIslandId) : null;
     const sourceIsland = dragSourceId ? islandLookup.get(dragSourceId) : activeSelected;
 
-    // 2. Nautical Range Indicator around Selected / Dragged Island
+    // 2. Nautical Range Indicator
     if (sourceIsland && sourceIsland.owner === myId) {
         ctx.save();
         ctx.beginPath();
         ctx.arc(sourceIsland.x, sourceIsland.y, sourceIsland.range, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(0, 255, 102, 0.25)';
+        ctx.strokeStyle = 'rgba(0, 255, 119, 0.3)';
         ctx.lineWidth = 1.5;
         ctx.setLineDash([8, 8]);
         ctx.stroke();
-        ctx.fillStyle = 'rgba(0, 255, 102, 0.03)';
+        ctx.fillStyle = 'rgba(0, 255, 119, 0.03)';
         ctx.fill();
         ctx.restore();
     }
 
-    // 3. Draw All Islands
+    // 3. Draw Islands
     for (const [id, isle] of islandLookup) {
         drawIsland(isle);
     }
 
-    // 4. Draw Active Voyages & Radar Alerts
+    // 4. Draw Voyages & Radar Alerts
     drawVoyagesAndAlerts();
 
-    // 5. Draw Attack Vector Arrow
+    // 5. Draw Attack Arrow
     if (isDraggingAttack && sourceIsland) {
         drawAttackArrow(sourceIsland, dragCurrentPos.x, dragCurrentPos.y);
     }
 
-    // 6. Draw Scout Ship
+    // 6. Draw Scout Vessel
     drawScoutVessel();
 
     ctx.restore();
@@ -705,33 +716,31 @@ function drawIsland(isle) {
     const isSelected = (selectedIslandId === isle.id);
     const radius = getIslandRadius(isle);
 
-    // Body
     ctx.beginPath();
     ctx.arc(isle.x, isle.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = isMine 
-        ? 'rgba(0, 255, 102, 0.15)' 
-        : isEnemy ? 'rgba(231, 76, 60, 0.15)' : 'rgba(25, 40, 55, 0.85)';
+        ? 'rgba(0, 255, 119, 0.15)' 
+        : isEnemy ? 'rgba(255, 56, 56, 0.15)' : 'rgba(25, 40, 55, 0.85)';
     ctx.fill();
 
-    const themeColor = isMine ? '#00ff66' : isEnemy ? '#e74c3c' : '#7f93a5';
+    const themeColor = isMine ? '#00ff77' : isEnemy ? '#ff3838' : '#7f93a5';
     ctx.strokeStyle = themeColor;
     ctx.lineWidth = isMine ? 2.5 : (radius >= 80 ? 3.0 : 1.5);
     ctx.stroke();
 
-    // Pulsing Tactical Selection Ring (For tap-to-attack targeting)
+    // Tactical Selection Bracket
     if (isSelected) {
         ctx.save();
         const pulse = 4 + (Date.now() % 600) / 75;
         ctx.beginPath();
         ctx.arc(isle.x, isle.y, radius + pulse, 0, Math.PI * 2);
-        ctx.strokeStyle = '#00ff66';
+        ctx.strokeStyle = '#00ff77';
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 4]);
         ctx.stroke();
         ctx.restore();
     }
 
-    // High-tier Concentric Rings
     if (radius >= 40) {
         ctx.save();
         ctx.beginPath();
@@ -745,26 +754,25 @@ function drawIsland(isle) {
 
     ctx.textAlign = 'center';
 
-    // Label Placement
     if (radius <= 10) {
         ctx.fillStyle = themeColor;
-        ctx.font = 'bold 9px Courier New';
+        ctx.font = 'bold 9px "Share Tech Mono", monospace';
         ctx.fillText(`T${isle.level}`, isle.x, isle.y - radius - 5);
         ctx.fillText(`${isle.population}`, isle.x, isle.y + radius + 11);
     } else {
         if (isle.gold > 0) {
-            ctx.fillStyle = '#f1c40f';
-            ctx.font = 'bold 10px Courier New';
+            ctx.fillStyle = '#f5b041';
+            ctx.font = 'bold 10px "Share Tech Mono", monospace';
             ctx.fillText(`🪙${isle.gold}`, isle.x, isle.y - radius - 6);
         }
 
         ctx.fillStyle = themeColor;
         const badgeSize = Math.min(24, 10 + Math.floor(radius * 0.2));
-        ctx.font = `bold ${badgeSize}px Courier New`;
+        ctx.font = `bold ${badgeSize}px "Rajdhani", sans-serif`;
         const label = isle.type === 'MINE' ? `⛏️M${isle.level}` : `T${isle.level}`;
         ctx.fillText(label, isle.x, isle.y + badgeSize * 0.35);
 
-        ctx.font = 'bold 11px Courier New';
+        ctx.font = 'bold 11px "Share Tech Mono", monospace';
         ctx.fillText(`👥${isle.population}/${isle.maxPop}`, isle.x, isle.y + radius + 14);
     }
 
@@ -783,7 +791,7 @@ function drawAttackArrow(source, tx, ty) {
     const efficiency = Math.round(decay * 100);
 
     const isOutOfReach = dist > range * 1.5;
-    const strokeColor = isOutOfReach ? '#e74c3c' : '#00ff66';
+    const strokeColor = isOutOfReach ? '#ff3838' : '#00ff77';
 
     ctx.save();
     ctx.beginPath();
@@ -808,7 +816,7 @@ function drawAttackArrow(source, tx, ty) {
     ctx.restore();
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 11px Courier New';
+    ctx.font = 'bold 11px "Share Tech Mono", monospace';
     ctx.fillText(`Troops: ${sent} ➔ ${estimatedArrive} (${efficiency}%) | Gold: ${Math.floor(source.gold * sendGoldRatio)}`, tx + 14, ty - 8);
 }
 
@@ -828,18 +836,18 @@ function drawVoyagesAndAlerts() {
         ctx.setLineDash([4, 4]);
         ctx.moveTo(v.startX, v.startY);
         ctx.lineTo(curX, curY);
-        ctx.strokeStyle = isMine ? 'rgba(0, 255, 102, 0.4)' : 'rgba(231, 76, 60, 0.4)';
+        ctx.strokeStyle = isMine ? 'rgba(0, 255, 119, 0.4)' : 'rgba(255, 56, 56, 0.4)';
         ctx.lineWidth = 1.5;
         ctx.stroke();
         ctx.setLineDash([]);
 
         ctx.beginPath();
         ctx.arc(curX, curY, 5, 0, Math.PI * 2);
-        ctx.fillStyle = isMine ? '#00ff66' : '#e74c3c';
+        ctx.fillStyle = isMine ? '#00ff77' : '#ff3838';
         ctx.fill();
 
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 10px Courier New';
+        ctx.font = 'bold 10px "Share Tech Mono", monospace';
         ctx.fillText(`${v.effectivePop}`, curX + 8, curY + 3);
 
         const targetIsland = islandLookup.get(v.toId);
@@ -849,7 +857,7 @@ function drawVoyagesAndAlerts() {
             ctx.setLineDash([8, 8]);
             ctx.moveTo(curX, curY);
             ctx.lineTo(targetIsland.x, targetIsland.y);
-            ctx.strokeStyle = '#e74c3c';
+            ctx.strokeStyle = '#ff3838';
             ctx.lineWidth = 2.5;
             ctx.stroke();
             ctx.setLineDash([]);
@@ -857,18 +865,18 @@ function drawVoyagesAndAlerts() {
             const pulse = 10 + (Date.now() % 800) / 40;
             ctx.beginPath();
             ctx.arc(targetIsland.x, targetIsland.y, getIslandRadius(targetIsland) + pulse, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(231, 76, 60, 0.5)';
+            ctx.strokeStyle = 'rgba(255, 56, 56, 0.5)';
             ctx.lineWidth = 2;
             ctx.stroke();
 
             ctx.fillStyle = 'rgba(4, 15, 30, 0.85)';
             ctx.fillRect(targetIsland.x - 70, targetIsland.y - getIslandRadius(targetIsland) - 30, 140, 20);
-            ctx.strokeStyle = '#e74c3c';
+            ctx.strokeStyle = '#ff3838';
             ctx.lineWidth = 1;
             ctx.strokeRect(targetIsland.x - 70, targetIsland.y - getIslandRadius(targetIsland) - 30, 140, 20);
 
             ctx.fillStyle = '#ff4d4d';
-            ctx.font = 'bold 10px Courier New';
+            ctx.font = 'bold 10px "Share Tech Mono", monospace';
             ctx.textAlign = 'center';
             ctx.fillText(`⏱️ ${remainingSec}s | ⚔️${v.effectivePop}`, targetIsland.x, targetIsland.y - getIslandRadius(targetIsland) - 16);
             ctx.textAlign = 'left';
@@ -894,20 +902,20 @@ function drawScoutVessel() {
         ctx.setLineDash([6, 6]);
         ctx.moveTo(fromX, fromY);
         ctx.lineTo(toX, toY);
-        ctx.strokeStyle = '#f39c12';
+        ctx.strokeStyle = '#f5b041';
         ctx.lineWidth = 2;
         ctx.stroke();
         ctx.setLineDash([]);
 
         ctx.beginPath();
         ctx.arc(currentX, currentY, 7, 0, Math.PI * 2);
-        ctx.fillStyle = '#f1c40f';
+        ctx.fillStyle = '#f5b041';
         ctx.fill();
 
         const pingRadius = 15 + (Date.now() % 1000) / 25;
         ctx.beginPath();
         ctx.arc(currentX, currentY, pingRadius, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(241, 196, 15, 0.45)';
+        ctx.strokeStyle = 'rgba(245, 176, 65, 0.45)';
         ctx.stroke();
     }
 }
