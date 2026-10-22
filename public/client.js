@@ -694,10 +694,10 @@ function refreshArmory(isle) {
     document.getElementById('up-range-val').innerText = `${isle.range} (Lv ${up.range})`;
     document.getElementById('up-defense-val').innerText = `${isle.defense} (Lv ${up.defense})`;
 
-    // 2x per level scaling: Level 0->1 is 50, 1->2 is 100, 2->3 is 200, etc. (multiplied by isle.level)
-    const speedCost = Math.floor(50 * Math.pow(2, up.speed) * isle.level);
-    const rangeCost = Math.floor(50 * Math.pow(2, up.range) * isle.level);
-    const defCost = Math.floor(50 * Math.pow(2, up.defense) * isle.level);
+    // 2x exponential curve on stat level AND 2x exponential curve on island tier level
+    const speedCost = Math.floor(50 * Math.pow(2, up.speed) * Math.pow(2, isle.level - 1));
+    const rangeCost = Math.floor(50 * Math.pow(2, up.range) * Math.pow(2, isle.level - 1));
+    const defCost = Math.floor(50 * Math.pow(2, up.defense) * Math.pow(2, isle.level - 1));
 
     document.getElementById('up-speed-cost').innerText = speedCost;
     document.getElementById('up-range-cost').innerText = rangeCost;

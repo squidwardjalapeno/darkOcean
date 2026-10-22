@@ -572,8 +572,8 @@ io.on('connection', (socket) => {
     const currentLvl = isle.upgrades[upgradeType] || 0;
     if (currentLvl >= 5) return;
 
-    // 2x per level scaling: Base 50 * 2^currentLvl * island tier level
-    const cost = Math.floor(50 * Math.pow(2, currentLvl) * isle.level);
+    // 2x exponential curve on stat level AND 2x exponential curve on island tier level (2^(islandLevel - 1))
+    const cost = Math.floor(50 * Math.pow(2, currentLvl) * Math.pow(2, isle.level - 1));
     if (isle.gold < cost) return;
 
     isle.gold -= cost;
