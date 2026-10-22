@@ -458,3 +458,43 @@ input[type="text"]:focus {
 .hidden {
     display: none !important;
 }
+
+/* Responsive Mobile & Tablet Layout */
+@media (max-width: 820px) {
+    #game-hud {
+        flex-direction: column;
+        gap: 8px;
+        top: 8px;
+        left: 8px;
+        right: 8px;
+    }
+
+    .hud-panel {
+        padding: 6px 10px;
+    }
+
+    .center-panel {
+        min-width: unset;
+        width: 100%;
+    }
+
+    .side-drawer {
+        top: unset;
+        bottom: 12px;
+        left: 12px;
+        right: 12px;
+        width: auto;
+        max-height: 48vh;
+        overflow-y: auto;
+    }
+
+    .modal-card {
+        width: 90vw;
+        min-width: unset;
+        padding: 20px;
+    }
+
+    .lobby-card {
+        max-width: 95vw;
+    }
+}

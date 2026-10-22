@@ -15,10 +15,9 @@ const io = new Server(http);
 app.use(express.static(path.join(__dirname, 'public')));
 
 const SECTOR_SIZE = 800;
-const MAP_SECTORS = 10; // 10x10 sectors (0..9)
-const SCOUT_TIME_MS = 30000; // 30 seconds to scout
+const MAP_SECTORS = 10;
+const SCOUT_TIME_MS = 30000;
 
-// Tier Points & Scaled Stats (Speed & Growth reduced by ~5x for paced gameplay)
 const ISLAND_TIERS = {
     1: { name: "Sandbar",           points: 1,     maxPop: 150,   growth: 0.5, defense: 1.0,  range: 500,  speed: 22 },
     2: { name: "Reef Haven",        points: 5,     maxPop: 400,   growth: 1.2, defense: 1.15, range: 850,  speed: 25 },
@@ -47,7 +46,7 @@ function pseudoRandom(seed) {
 
 function rollIslandLevel(rng) {
     const roll = rng();
-    if (roll < 0.000064) return 7; // Extremely rare
+    if (roll < 0.000064) return 7;
     if (roll < 0.0004) return 6;
     if (roll < 0.0025) return 5;
     if (roll < 0.015) return 4;
@@ -56,34 +55,32 @@ function rollIslandLevel(rng) {
     return 1;
 }
 
-// ==========================================
-// GAME INSTANCES & LOBBIES
-// ==========================================
-const lobbies = new Map(); // lobbyId -> lobby
-const games = new Map();   // gameId -> game
+// Global Match & Room Tracking
+const lobbies = new Map();
+const games = new Map();
+const socketToGameId = new Map(); // Guaranteed game lookup for every socket
 
 class GameSession {
     constructor(id, players) {
         this.id = id;
-        this.players = players; // Array of { id, name, socket }
+        this.players = players;
         this.sectors = new Map();
         this.allIslands = new Map();
         this.activeVoyages = new Map();
         this.totalWorldPoints = 0;
         this.gameOver = false;
         this.winner = null;
-
         this.playerStates = new Map();
+
         this.initWorld();
     }
 
     initWorld() {
-        // Pre-generate 10x10 sectors so total points and layouts are deterministic
         const mapSeed = Math.floor(Math.random() * 1000000);
         for (let sx = 0; sx < MAP_SECTORS; sx++) {
             for (let sy = 0; sy < MAP_SECTORS; sy++) {
                 const sKey = `${sx}_${sy}`;
-                const rng = pseudoRandom(mapSeed + sx * 73856093 ^ sy * 19349663);
+                const rng = pseudoRandom(mapSeed + (sx * 73856093) ^ (sy * 19349663));
                 const count = 3 + Math.floor(rng() * 3);
                 const sectorIslands = [];
 
@@ -151,10 +148,10 @@ class GameSession {
             }
         }
 
-        // Spawn Players on distant sectors
-        const spawnA = { sx: 1 + Math.floor(Math.random() * 2), sy: 1 + Math.floor(Math.random() * 2) };
-        const spawnB = { sx: 7 + Math.floor(Math.random() * 2), sy: 7 + Math.floor(Math.random() * 2) };
-        const spawns = [spawnA, spawnB];
+        const spawns = [
+            { sx: 1 + Math.floor(Math.random() * 2), sy: 1 + Math.floor(Math.random() * 2) },
+            { sx: 7 + Math.floor(Math.random() * 2), sy: 7 + Math.floor(Math.random() * 2) }
+        ];
 
         this.players.forEach((p, idx) => {
             const sp = spawns[idx];
@@ -190,6 +187,7 @@ class GameSession {
 
     start() {
         this.players.forEach(p => {
+            socketToGameId.set(p.id, this.id);
             const pState = this.playerStates.get(p.id);
             const revealed = Array.from(pState.discoveredSectors).map(key => {
                 const [sx, sy] = key.split('_').map(Number);
@@ -236,9 +234,6 @@ class GameSession {
     }
 }
 
-// ==========================================
-// SOCKET DISPATCH & AUTO-SCOUTING
-// ==========================================
 function findNextAutoScoutSector(playerState) {
     const visited = new Set(playerState.discoveredSectors);
     const candidateSectors = [];
@@ -269,9 +264,7 @@ function findNextAutoScoutSector(playerState) {
 }
 
 io.on('connection', (socket) => {
-    let currentLobbyId = null;
-    let currentGameId = null;
-    let playerName = "ANON";
+    let playerName = "CAPT";
 
     socket.on('setPlayerName', (name) => {
         playerName = (name || "CAPT").slice(0, 4).toUpperCase();
@@ -296,11 +289,10 @@ io.on('connection', (socket) => {
         const lobbyId = `LOBBY_${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
         const lobby = {
             id: lobbyId,
-            players: [{ id: socket.id, name: playerName, socket }],
+            players: [{ id: socket.id, name: playerName }],
             started: false
         };
         lobbies.set(lobbyId, lobby);
-        currentLobbyId = lobbyId;
         socket.join(lobbyId);
 
         socket.emit('lobbyCreated', { lobbyId, host: playerName });
@@ -310,57 +302,26 @@ io.on('connection', (socket) => {
     socket.on('joinLobby', (lobbyId) => {
         const lobby = lobbies.get(lobbyId);
         if (!lobby || lobby.players.length >= 2 || lobby.started) {
-            socket.emit('joinError', 'Lobby is full or no longer exists.');
+            socket.emit('joinError', 'Lobby is full or expired.');
             return;
         }
 
-        lobby.players.push({ id: socket.id, name: playerName, socket });
-        currentLobbyId = lobbyId;
+        lobby.players.push({ id: socket.id, name: playerName });
         socket.join(lobbyId);
-
-        // 2 players assembled -> Start Game
         lobby.started = true;
+
         const game = new GameSession(lobbyId, lobby.players);
         games.set(lobbyId, game);
-        currentGameId = lobbyId;
 
         io.emit('lobbyUpdated');
         game.start();
     });
 
-    socket.on('dispatchScout', (target) => {
-        if (!currentGameId) return;
-        const game = games.get(currentGameId);
-        if (!game || game.gameOver) return;
-
-        const pState = game.playerStates.get(socket.id);
-        if (!pState || pState.scout.state === 'CHARTING') return;
-
-        const { sx, sy } = target;
-        if (sx < 0 || sx >= MAP_SECTORS || sy < 0 || sy >= MAP_SECTORS) return;
-
-        pState.scout.state = 'CHARTING';
-        pState.scout.targetSector = { sx, sy };
-        pState.scout.startTime = Date.now();
-        pState.scout.duration = SCOUT_TIME_MS;
-
-        socket.emit('scoutUpdate', pState.scout);
-    });
-
-    socket.on('toggleAutoScout', (enabled) => {
-        if (!currentGameId) return;
-        const game = games.get(currentGameId);
-        if (!game) return;
-        const pState = game.playerStates.get(socket.id);
-        if (pState) {
-            pState.autoScout = enabled;
-            socket.emit('autoScoutState', pState.autoScout);
-        }
-    });
-
     socket.on('sendVoyage', (data) => {
-        if (!currentGameId) return;
-        const game = games.get(currentGameId);
+        const gameId = socketToGameId.get(socket.id);
+        if (!gameId) return;
+
+        const game = games.get(gameId);
         if (!game || game.gameOver) return;
 
         const from = game.allIslands.get(data.fromId);
@@ -369,17 +330,15 @@ io.on('connection', (socket) => {
 
         const ratio = Math.max(0.1, Math.min(0.95, data.percentage || 0.5));
         const troopsSent = Math.floor(from.population * ratio);
-        if (troopsSent < 2) return;
+        if (troopsSent < 1) return;
 
-        // Transport gold if chosen
         const goldSentRatio = Math.max(0, Math.min(1.0, data.goldRatio || 0));
         const goldSent = Math.floor((from.gold || 0) * goldSentRatio);
 
         from.population -= troopsSent;
         from.gold -= goldSent;
 
-        // Broadcast source island changes immediately
-        io.to(currentGameId).emit('islandUpdated', {
+        io.to(gameId).emit('islandUpdated', {
             id: from.id,
             population: from.population,
             gold: from.gold,
@@ -413,18 +372,55 @@ io.on('connection', (socket) => {
         };
 
         game.activeVoyages.set(voyageId, voyage);
-        io.to(currentGameId).emit('voyageLaunched', voyage);
+        io.to(gameId).emit('voyageLaunched', voyage);
+    });
+
+    socket.on('dispatchScout', (target) => {
+        const gameId = socketToGameId.get(socket.id);
+        if (!gameId) return;
+
+        const game = games.get(gameId);
+        if (!game || game.gameOver) return;
+
+        const pState = game.playerStates.get(socket.id);
+        if (!pState || pState.scout.state === 'CHARTING') return;
+
+        const { sx, sy } = target;
+        if (sx < 0 || sx >= MAP_SECTORS || sy < 0 || sy >= MAP_SECTORS) return;
+
+        pState.scout.state = 'CHARTING';
+        pState.scout.targetSector = { sx, sy };
+        pState.scout.startTime = Date.now();
+        pState.scout.duration = SCOUT_TIME_MS;
+
+        socket.emit('scoutUpdate', pState.scout);
+    });
+
+    socket.on('toggleAutoScout', (enabled) => {
+        const gameId = socketToGameId.get(socket.id);
+        if (!gameId) return;
+
+        const game = games.get(gameId);
+        if (!game) return;
+
+        const pState = game.playerStates.get(socket.id);
+        if (pState) {
+            pState.autoScout = enabled;
+            socket.emit('autoScoutState', pState.autoScout);
+        }
     });
 
     socket.on('upgradeIsland', (data) => {
-        if (!currentGameId) return;
-        const game = games.get(currentGameId);
+        const gameId = socketToGameId.get(socket.id);
+        if (!gameId) return;
+
+        const game = games.get(gameId);
         if (!game || game.gameOver) return;
 
         const isle = game.allIslands.get(data.islandId);
         if (!isle || isle.owner !== socket.id) return;
 
-        const upgradeType = data.type; // 'speed', 'range', 'defense'
+        const upgradeType = data.type;
         const currentLvl = isle.upgrades[upgradeType] || 0;
         if (currentLvl >= 5) return;
 
@@ -438,7 +434,7 @@ io.on('connection', (socket) => {
         if (upgradeType === 'range') isle.range = Math.round(isle.range * 1.20);
         if (upgradeType === 'defense') isle.defense = Number((isle.defense + 0.25).toFixed(2));
 
-        io.to(currentGameId).emit('islandUpgraded', {
+        io.to(gameId).emit('islandUpgraded', {
             id: isle.id,
             gold: isle.gold,
             speed: isle.speed,
@@ -449,28 +445,17 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        if (currentLobbyId && lobbies.has(currentLobbyId)) {
-            const lobby = lobbies.get(currentLobbyId);
-            lobby.players = lobby.players.filter(p => p.id !== socket.id);
-            if (lobby.players.length === 0) {
-                lobbies.delete(currentLobbyId);
-            }
-            io.emit('lobbyUpdated');
-        }
+        socketToGameId.delete(socket.id);
     });
 });
 
-// ==========================================
-// MAIN TICK LOOPS
-// ==========================================
-// High Frequency (20Hz): Scouts, Voyages & Arrivals
+// 20Hz Tick: Scouts and Voyages
 setInterval(() => {
     const now = Date.now();
 
     for (const [gId, game] of games) {
         if (game.gameOver) continue;
 
-        // Scouts
         for (const [playerId, pState] of game.playerStates) {
             const scout = pState.scout;
 
@@ -503,7 +488,6 @@ setInterval(() => {
             }
         }
 
-        // Voyages
         for (const [vId, v] of game.activeVoyages) {
             if (now >= v.arrivalTime) {
                 resolveVoyageArrival(game, v);
@@ -515,13 +499,12 @@ setInterval(() => {
     }
 }, 50);
 
-// Slow Game Tick (1Hz): Balanced S-Curve Growth & Gold
+// 1Hz Tick: Population Growth & Gold
 setInterval(() => {
     for (const [gId, game] of games) {
         if (game.gameOver) continue;
 
         for (const [id, isle] of game.allIslands) {
-            // Dark Forest Rule: Only owned islands grow population
             if (isle.owner) {
                 const ratio = Math.max(0.02, isle.population / isle.maxPop);
                 if (ratio < 1.0) {

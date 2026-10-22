@@ -4,7 +4,7 @@ const canvas = document.getElementById('viewport');
 const ctx = canvas.getContext('2d');
 
 let myId = null;
-let myName = "ANON";
+let myName = "CAPT";
 let enemyId = null;
 let enemyName = "ENEMY";
 let totalWorldPoints = 1;
@@ -25,27 +25,23 @@ const activeVoyages = new Map();
 let scout = { state: 'IDLE', currentSector: { sx: 0, sy: 0 }, targetSector: null };
 let autoScoutEnabled = false;
 
-// Attack & Transport selections
+// Selection & Attack State
+let selectedIslandId = null;       // Active island for upgrades & tap-to-attack origin
 let sendTroopRatio = 0.50;
 let sendGoldRatio = 0.0;
 let isDraggingAttack = false;
 let dragSourceId = null;
 let dragCurrentPos = { x: 0, y: 0 };
-let clickOrigin = { x: 0, y: 0 };
-let selectedIslandId = null;
+let pointerDownPos = { x: 0, y: 0 };
 
-// ==========================================
-// 1. DYNAMIC POWER-OF-2 ISLAND SIZING
-// ==========================================
+// Touch tracking for pinch-to-zoom & mobile panning
+let touchStartDist = 0;
+let touchStartZoom = 0.75;
+let isPanning = false;
+let lastPanPos = { x: 0, y: 0 };
+
+// Island Radii
 function getIslandRadius(isle) {
-    // Exact requested progression:
-    // Level 1: 5px
-    // Level 2: 10px
-    // Level 3: 20px
-    // Level 4: 40px
-    // Level 5: 80px
-    // Level 6: 160px
-    // Level 7: 320px
     const radii = [0, 5, 10, 20, 40, 80, 160, 320];
     return radii[isle.level] || 5;
 }
@@ -58,7 +54,7 @@ window.addEventListener('resize', resize);
 resize();
 
 // ==========================================
-// 2. LOBBY & PRE-GAME UI HANDLERS
+// 1. LOBBY & PRE-GAME UI
 // ==========================================
 const nameModal = document.getElementById('name-modal');
 const lobbyModal = document.getElementById('lobby-modal');
@@ -89,22 +85,15 @@ socket.on('nameConfirmed', (name) => {
     socket.emit('getLobbies');
 });
 
-createLobbyBtn.onclick = () => {
-    socket.emit('createLobby');
-};
+createLobbyBtn.onclick = () => socket.emit('createLobby');
+refreshLobbiesBtn.onclick = () => socket.emit('getLobbies');
 
-refreshLobbiesBtn.onclick = () => {
-    socket.emit('getLobbies');
-};
-
-socket.on('lobbyCreated', (data) => {
+socket.on('lobbyCreated', () => {
     createLobbyBtn.disabled = true;
     waitingNotice.classList.remove('hidden');
 });
 
-socket.on('lobbyUpdated', () => {
-    socket.emit('getLobbies');
-});
+socket.on('lobbyUpdated', () => socket.emit('getLobbies'));
 
 socket.on('lobbyList', (list) => {
     lobbyList.innerHTML = '';
@@ -117,14 +106,10 @@ socket.on('lobbyList', (list) => {
         const row = document.createElement('div');
         row.className = 'lobby-item';
         row.innerHTML = `
-            <div>
-                <strong>${item.host}'S LOBBY</strong> [${item.id}]
-            </div>
+            <div><strong>${item.host}'S LOBBY</strong> [${item.id}]</div>
             <button class="join-btn" data-id="${item.id}">ENGAGE</button>
         `;
-        row.querySelector('.join-btn').onclick = () => {
-            socket.emit('joinLobby', item.id);
-        };
+        row.querySelector('.join-btn').onclick = () => socket.emit('joinLobby', item.id);
         lobbyList.appendChild(row);
     });
 });
@@ -155,35 +140,19 @@ socket.on('gameStarted', (data) => {
         sec.islands.forEach(isle => islandLookup.set(isle.id, isle));
     });
 
-    // Center camera on starter sector
     const myHome = Array.from(islandLookup.values()).find(i => i.owner === myId);
     if (myHome) {
         camera.x = myHome.x;
         camera.y = myHome.y;
+        selectIsland(myHome);
     }
 
     updateHUD();
 });
 
 // ==========================================
-// 3. MOUSE & KEYBOARD PANNING
+// 2. COORDINATES & TOUCH-SAFE HITBOXES
 // ==========================================
-const PAN_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'];
-
-window.addEventListener('keydown', (e) => {
-    if (PAN_KEYS.includes(e.code)) {
-        e.preventDefault();
-        keysDown.add(e.code);
-    }
-});
-
-window.addEventListener('keyup', (e) => {
-    if (PAN_KEYS.includes(e.code)) {
-        e.preventDefault();
-        keysDown.delete(e.code);
-    }
-});
-
 function screenToWorld(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const sx = clientX - rect.left;
@@ -200,8 +169,8 @@ function findIslandNear(wx, wy) {
 
     for (const [id, isle] of islandLookup) {
         const radius = getIslandRadius(isle);
-        // Generous hitbox tolerance for tiny 5px and 10px islands
-        const hitRadius = Math.max(18, radius + 8);
+        // Generous hitbox tolerance for small 5px/10px islands on touch screens
+        const hitRadius = Math.max(26, radius + 12);
         const dist = Math.hypot(isle.x - wx, isle.y - wy);
 
         if (dist <= hitRadius && dist < minDist) {
@@ -212,56 +181,95 @@ function findIslandNear(wx, wy) {
     return closest;
 }
 
+function executeAttack(fromIslandId, toIslandId) {
+    if (!fromIslandId || !toIslandId || fromIslandId === toIslandId) return;
+    socket.emit('sendVoyage', {
+        fromId: fromIslandId,
+        toId: toIslandId,
+        percentage: sendTroopRatio,
+        goldRatio: sendGoldRatio
+    });
+}
+
+function selectIsland(isle) {
+    selectedIslandId = isle ? isle.id : null;
+    if (isle) openInspector(isle);
+    else closeInspector();
+}
+
+// ==========================================
+// 3. MOUSE & DRAG / CLICK-TO-ATTACK
+// ==========================================
 window.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
-
+    pointerDownPos = { x: e.clientX, y: e.clientY };
     const world = screenToWorld(e.clientX, e.clientY);
-    clickOrigin = { x: e.clientX, y: e.clientY };
     const clicked = findIslandNear(world.x, world.y);
 
     if (clicked && clicked.owner === myId) {
         isDraggingAttack = true;
         dragSourceId = clicked.id;
         dragCurrentPos = world;
-        openInspector(clicked);
-    } else if (clicked) {
-        openInspector(clicked);
+        selectIsland(clicked);
+    } else {
+        isPanning = true;
+        lastPanPos = { x: e.clientX, y: e.clientY };
     }
 });
 
 window.addEventListener('mousemove', (e) => {
     if (isDraggingAttack) {
         dragCurrentPos = screenToWorld(e.clientX, e.clientY);
+    } else if (isPanning) {
+        const dx = (e.clientX - lastPanPos.x) / camera.zoom;
+        const dy = (e.clientY - lastPanPos.y) / camera.zoom;
+        camera.x -= dx;
+        camera.y -= dy;
+        lastPanPos = { x: e.clientX, y: e.clientY };
     }
 });
 
 window.addEventListener('mouseup', (e) => {
+    const moveDist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
     const world = screenToWorld(e.clientX, e.clientY);
+    const target = findIslandNear(world.x, world.y);
 
+    // 1. Handle Drag Release
     if (isDraggingAttack && dragSourceId) {
-        const target = findIslandNear(world.x, world.y);
         if (target && target.id !== dragSourceId) {
-            socket.emit('sendVoyage', {
-                fromId: dragSourceId,
-                toId: target.id,
-                percentage: sendTroopRatio,
-                goldRatio: sendGoldRatio
-            });
+            executeAttack(dragSourceId, target.id);
         }
         isDraggingAttack = false;
         dragSourceId = null;
+        isPanning = false;
         return;
     }
 
-    const moved = Math.hypot(e.clientX - clickOrigin.x, e.clientY - clickOrigin.y);
-    if (moved < 5) {
-        const sx = Math.floor(world.x / SECTOR_SIZE);
-        const sy = Math.floor(world.y / SECTOR_SIZE);
+    isPanning = false;
 
-        if (sx >= 0 && sx < MAP_SECTORS && sy >= 0 && sy < MAP_SECTORS) {
-            const key = `${sx}_${sy}`;
-            if (!discoveredSectors.has(key)) {
-                socket.emit('dispatchScout', { sx, sy });
+    // 2. Handle Tap/Click (short click without dragging)
+    if (moveDist < 8) {
+        if (target) {
+            if (target.owner === myId) {
+                // Clicked an owned island -> select it
+                selectIsland(target);
+            } else if (selectedIslandId) {
+                // Clicked an unowned / enemy island while our island is selected -> TAP-TO-ATTACK!
+                executeAttack(selectedIslandId, target.id);
+            } else {
+                openInspector(target);
+            }
+        } else {
+            // Clicked empty ocean or fog
+            const sx = Math.floor(world.x / SECTOR_SIZE);
+            const sy = Math.floor(world.y / SECTOR_SIZE);
+            if (sx >= 0 && sx < MAP_SECTORS && sy >= 0 && sy < MAP_SECTORS) {
+                const key = `${sx}_${sy}`;
+                if (!discoveredSectors.has(key)) {
+                    socket.emit('dispatchScout', { sx, sy });
+                } else {
+                    selectIsland(null); // Clicked charted ocean: deselect
+                }
             }
         }
     }
@@ -269,11 +277,127 @@ window.addEventListener('mouseup', (e) => {
 
 window.addEventListener('wheel', (e) => {
     const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    camera.zoom = Math.max(0.15, Math.min(2.5, camera.zoom * factor));
+    camera.zoom = Math.max(0.12, Math.min(2.5, camera.zoom * factor));
 });
 
 // ==========================================
-// 4. SOCKET SYNCHRONIZATION
+// 4. MOBILE TOUCH SUPPORT & PINCH-ZOOM
+// ==========================================
+canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) {
+        const t = e.touches[0];
+        pointerDownPos = { x: t.clientX, y: t.clientY };
+        lastPanPos = { x: t.clientX, y: t.clientY };
+        const world = screenToWorld(t.clientX, t.clientY);
+        const clicked = findIslandNear(world.x, world.y);
+
+        if (clicked && clicked.owner === myId) {
+            isDraggingAttack = true;
+            dragSourceId = clicked.id;
+            dragCurrentPos = world;
+            selectIsland(clicked);
+        } else {
+            isPanning = true;
+        }
+    } else if (e.touches.length === 2) {
+        isDraggingAttack = false;
+        isPanning = false;
+        touchStartDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+        );
+        touchStartZoom = camera.zoom;
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+        const t = e.touches[0];
+        if (isDraggingAttack) {
+            dragCurrentPos = screenToWorld(t.clientX, t.clientY);
+        } else if (isPanning) {
+            const dx = (t.clientX - lastPanPos.x) / camera.zoom;
+            const dy = (t.clientY - lastPanPos.y) / camera.zoom;
+            camera.x -= dx;
+            camera.y -= dy;
+            lastPanPos = { x: t.clientX, y: t.clientY };
+        }
+    } else if (e.touches.length === 2) {
+        const dist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+        );
+        if (touchStartDist > 0) {
+            const ratio = dist / touchStartDist;
+            camera.zoom = Math.max(0.12, Math.min(2.5, touchStartZoom * ratio));
+        }
+    }
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+    if (e.changedTouches.length > 0) {
+        const t = e.changedTouches[0];
+        const moveDist = Math.hypot(t.clientX - pointerDownPos.x, t.clientY - pointerDownPos.y);
+        const world = screenToWorld(t.clientX, t.clientY);
+        const target = findIslandNear(world.x, world.y);
+
+        if (isDraggingAttack && dragSourceId) {
+            if (target && target.id !== dragSourceId) {
+                executeAttack(dragSourceId, target.id);
+            }
+            isDraggingAttack = false;
+            dragSourceId = null;
+            return;
+        }
+
+        isPanning = false;
+
+        // Mobile Tap action
+        if (moveDist < 12) {
+            if (target) {
+                if (target.owner === myId) {
+                    selectIsland(target);
+                } else if (selectedIslandId) {
+                    executeAttack(selectedIslandId, target.id);
+                } else {
+                    openInspector(target);
+                }
+            } else {
+                const sx = Math.floor(world.x / SECTOR_SIZE);
+                const sy = Math.floor(world.y / SECTOR_SIZE);
+                if (sx >= 0 && sx < MAP_SECTORS && sy >= 0 && sy < MAP_SECTORS) {
+                    const key = `${sx}_${sy}`;
+                    if (!discoveredSectors.has(key)) {
+                        socket.emit('dispatchScout', { sx, sy });
+                    } else {
+                        selectIsland(null);
+                    }
+                }
+            }
+        }
+    }
+});
+
+// ==========================================
+// 5. KEYBOARD PANNING
+// ==========================================
+const PAN_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'];
+window.addEventListener('keydown', (e) => {
+    if (PAN_KEYS.includes(e.code)) {
+        e.preventDefault();
+        keysDown.add(e.code);
+    }
+});
+window.addEventListener('keyup', (e) => {
+    if (PAN_KEYS.includes(e.code)) {
+        e.preventDefault();
+        keysDown.delete(e.code);
+    }
+});
+
+// ==========================================
+// 6. SOCKET SYNCHRONIZATION
 // ==========================================
 socket.on('scoutUpdate', (scoutData) => {
     scout = scoutData;
@@ -331,13 +455,8 @@ socket.on('islandsSync', (islandsList) => {
     renderScores();
 });
 
-socket.on('voyageLaunched', (v) => {
-    activeVoyages.set(v.id, v);
-});
-
-socket.on('voyageArrived', (data) => {
-    activeVoyages.delete(data.id);
-});
+socket.on('voyageLaunched', (v) => activeVoyages.set(v.id, v));
+socket.on('voyageArrived', (data) => activeVoyages.delete(data.id));
 
 socket.on('gameOver', (winner) => {
     const modal = document.getElementById('game-over-modal');
@@ -357,7 +476,7 @@ socket.on('gameOver', (winner) => {
 });
 
 // ==========================================
-// 5. HUD & SCOREBOARD
+// 7. HUD & INSPECTOR
 // ==========================================
 document.getElementById('auto-scout-btn').onclick = () => {
     socket.emit('toggleAutoScout', !autoScoutEnabled);
@@ -420,14 +539,13 @@ function renderScores() {
     document.getElementById('score-bar-p2').style.width = `${p2Pct}%`;
 }
 
-// ==========================================
-// 6. DOCKYARD INSPECTOR & GOLD UPGRADES
-// ==========================================
 const inspector = document.getElementById('island-inspector');
-document.getElementById('close-inspector-btn').onclick = () => {
+document.getElementById('close-inspector-btn').onclick = () => closeInspector();
+
+function closeInspector() {
     inspector.classList.add('hidden');
     selectedIslandId = null;
-};
+}
 
 function openInspector(isle) {
     selectedIslandId = isle.id;
@@ -466,13 +584,13 @@ function refreshInspector(isle) {
 }
 
 // ==========================================
-// 7. MASTER RENDER LOOP
+// 8. MASTER RENDER LOOP
 // ==========================================
 function render(now) {
     const dt = Math.min(0.1, (now - lastTime) / 1000);
     lastTime = now;
 
-    // Panning
+    // Keyboard Pan
     let moveX = 0;
     let moveY = 0;
     if (keysDown.has('KeyW') || keysDown.has('ArrowUp')) moveY -= 1;
@@ -532,19 +650,20 @@ function render(now) {
         }
     }
 
-    // Map Border
+    // Outer Sea Boundaries
     ctx.strokeStyle = 'rgba(0, 255, 102, 0.3)';
     ctx.lineWidth = 2;
     ctx.strokeRect(0, 0, MAP_SECTORS * SECTOR_SIZE, MAP_SECTORS * SECTOR_SIZE);
 
-    const sourceIsland = dragSourceId ? islandLookup.get(dragSourceId) : null;
+    const activeSelected = selectedIslandId ? islandLookup.get(selectedIslandId) : null;
+    const sourceIsland = dragSourceId ? islandLookup.get(dragSourceId) : activeSelected;
 
-    // 2. Nautical Range Ring
-    if (isDraggingAttack && sourceIsland) {
+    // 2. Nautical Range Indicator around Selected / Dragged Island
+    if (sourceIsland && sourceIsland.owner === myId) {
         ctx.save();
         ctx.beginPath();
         ctx.arc(sourceIsland.x, sourceIsland.y, sourceIsland.range, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(0, 255, 102, 0.3)';
+        ctx.strokeStyle = 'rgba(0, 255, 102, 0.25)';
         ctx.lineWidth = 1.5;
         ctx.setLineDash([8, 8]);
         ctx.stroke();
@@ -553,20 +672,20 @@ function render(now) {
         ctx.restore();
     }
 
-    // 3. Draw Islands
+    // 3. Draw All Islands
     for (const [id, isle] of islandLookup) {
         drawIsland(isle);
     }
 
-    // 4. Draw Active Voyages & Dark Forest Stopwatch Warnings
+    // 4. Draw Active Voyages & Radar Alerts
     drawVoyagesAndAlerts();
 
-    // 5. Draw Attack Arrow
+    // 5. Draw Attack Vector Arrow
     if (isDraggingAttack && sourceIsland) {
         drawAttackArrow(sourceIsland, dragCurrentPos.x, dragCurrentPos.y);
     }
 
-    // 6. Draw Scout Vessel
+    // 6. Draw Scout Ship
     drawScoutVessel();
 
     ctx.restore();
@@ -583,8 +702,10 @@ function render(now) {
 function drawIsland(isle) {
     const isMine = (isle.owner === myId);
     const isEnemy = (isle.owner !== null && isle.owner !== myId);
+    const isSelected = (selectedIslandId === isle.id);
     const radius = getIslandRadius(isle);
 
+    // Body
     ctx.beginPath();
     ctx.arc(isle.x, isle.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = isMine 
@@ -597,7 +718,20 @@ function drawIsland(isle) {
     ctx.lineWidth = isMine ? 2.5 : (radius >= 80 ? 3.0 : 1.5);
     ctx.stroke();
 
-    // High Tier Concentric Bastion Rings
+    // Pulsing Tactical Selection Ring (For tap-to-attack targeting)
+    if (isSelected) {
+        ctx.save();
+        const pulse = 4 + (Date.now() % 600) / 75;
+        ctx.beginPath();
+        ctx.arc(isle.x, isle.y, radius + pulse, 0, Math.PI * 2);
+        ctx.strokeStyle = '#00ff66';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    // High-tier Concentric Rings
     if (radius >= 40) {
         ctx.save();
         ctx.beginPath();
@@ -606,29 +740,18 @@ function drawIsland(isle) {
         ctx.lineWidth = 1;
         ctx.setLineDash([6, 6]);
         ctx.stroke();
-
-        if (radius >= 160) {
-            ctx.beginPath();
-            ctx.arc(isle.x, isle.y, radius * 0.45, 0, Math.PI * 2);
-            ctx.strokeStyle = themeColor;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([3, 5]);
-            ctx.stroke();
-        }
         ctx.restore();
     }
 
     ctx.textAlign = 'center';
 
-    // Smart label rendering: avoid cluttering 5px/10px circles
+    // Label Placement
     if (radius <= 10) {
-        // Compact display
         ctx.fillStyle = themeColor;
         ctx.font = 'bold 9px Courier New';
-        ctx.fillText(`T${isle.level}`, isle.x, isle.y - radius - 4);
-        ctx.fillText(`${isle.population}`, isle.x, isle.y + radius + 10);
+        ctx.fillText(`T${isle.level}`, isle.x, isle.y - radius - 5);
+        ctx.fillText(`${isle.population}`, isle.x, isle.y + radius + 11);
     } else {
-        // Detailed display
         if (isle.gold > 0) {
             ctx.fillStyle = '#f1c40f';
             ctx.font = 'bold 10px Courier New';
@@ -689,9 +812,6 @@ function drawAttackArrow(source, tx, ty) {
     ctx.fillText(`Troops: ${sent} ➔ ${estimatedArrive} (${efficiency}%) | Gold: ${Math.floor(source.gold * sendGoldRatio)}`, tx + 14, ty - 8);
 }
 
-// ==========================================
-// 8. DARK FOREST RADAR & INCOMING STOPWATCH
-// ==========================================
 function drawVoyagesAndAlerts() {
     const now = Date.now();
 
@@ -704,7 +824,6 @@ function drawVoyagesAndAlerts() {
         const curY = v.startY + (v.targetY - v.startY) * progress;
         const isMine = (v.owner === myId);
 
-        // Friendly or visible voyage line
         ctx.beginPath();
         ctx.setLineDash([4, 4]);
         ctx.moveTo(v.startX, v.startY);
@@ -714,7 +833,6 @@ function drawVoyagesAndAlerts() {
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Voyage Fleet Marker
         ctx.beginPath();
         ctx.arc(curX, curY, 5, 0, Math.PI * 2);
         ctx.fillStyle = isMine ? '#00ff66' : '#e74c3c';
@@ -724,13 +842,9 @@ function drawVoyagesAndAlerts() {
         ctx.font = 'bold 10px Courier New';
         ctx.fillText(`${v.effectivePop}`, curX + 8, curY + 3);
 
-        // DARK FOREST RADAR ALERT:
-        // If an enemy attacks one of MY islands, even through the fog of war,
-        // draw a red dashed attack vector and an active ticking stopwatch!
         const targetIsland = islandLookup.get(v.toId);
         if (targetIsland && targetIsland.owner === myId && !isMine) {
             ctx.save();
-            // Red dashed attack vector directly into our defended island
             ctx.beginPath();
             ctx.setLineDash([8, 8]);
             ctx.moveTo(curX, curY);
@@ -740,7 +854,6 @@ function drawVoyagesAndAlerts() {
             ctx.stroke();
             ctx.setLineDash([]);
 
-            // Defending Island Warning Pulse
             const pulse = 10 + (Date.now() % 800) / 40;
             ctx.beginPath();
             ctx.arc(targetIsland.x, targetIsland.y, getIslandRadius(targetIsland) + pulse, 0, Math.PI * 2);
@@ -748,7 +861,6 @@ function drawVoyagesAndAlerts() {
             ctx.lineWidth = 2;
             ctx.stroke();
 
-            // Stopwatch Ticker Tag
             ctx.fillStyle = 'rgba(4, 15, 30, 0.85)';
             ctx.fillRect(targetIsland.x - 70, targetIsland.y - getIslandRadius(targetIsland) - 30, 140, 20);
             ctx.strokeStyle = '#e74c3c';
