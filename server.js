@@ -88,7 +88,7 @@ class GameSession {
 
                 for (let i = 0; i < count; i++) {
                     // 25% mine chance ensures healthy gold reef distributions
-                    const isMine = rng() < 0.25;
+                    const isMine = rng() < 0.10;
                     const level = rollIslandLevel(rng);
                     const padding = 130;
                     const localX = padding + Math.floor(rng() * (SECTOR_SIZE - padding * 2));
