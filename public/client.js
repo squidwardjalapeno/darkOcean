@@ -27,6 +27,22 @@ const PAN_SPEED = 700;
 const keysDown = new Set();
 let lastTime = performance.now();
 
+// --- ADD THESE KEYBOARD LISTENERS HERE ---
+window.addEventListener('keydown', (e) => {
+    // Prevent default window scrolling behavior when pressing arrows or spacebar
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+        e.preventDefault();
+    }
+    keysDown.add(e.code);
+});
+
+window.addEventListener('keyup', (e) => {
+    keysDown.delete(e.code);
+});
+// ----------------------------------------
+
+
+
 // Game State
 const discoveredSectors = new Set();
 const islandLookup = new Map();
