@@ -1,0 +1,460 @@
+/* style.css */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    position: fixed;
+    inset: 0;
+    background-color: #02060e;
+    color: #e0e6ed;
+    font-family: 'Courier New', Courier, monospace;
+    touch-action: none;
+    user-select: none;
+}
+
+#app-viewport {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+}
+
+canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    background-color: #02060e;
+}
+
+/* MODALS & OVERLAYS */
+.modal-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(2, 6, 14, 0.94);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-card {
+    background: #051426;
+    border: 2px solid #1a3a60;
+    padding: 28px 36px;
+    border-radius: 4px;
+    box-shadow: 0 0 30px rgba(0, 255, 102, 0.1);
+    text-align: center;
+    min-width: 320px;
+}
+
+.lobby-card {
+    min-width: 480px;
+    max-width: 600px;
+}
+
+.modal-header {
+    font-size: 22px;
+    font-weight: bold;
+    color: #00ff66;
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+}
+
+.modal-sub {
+    font-size: 11px;
+    color: #4ba3e3;
+    margin-bottom: 20px;
+    letter-spacing: 1px;
+}
+
+.callsign-display {
+    font-size: 13px;
+    color: #f1c40f;
+    margin-bottom: 16px;
+}
+
+.input-wrap {
+    margin-bottom: 20px;
+    text-align: left;
+}
+
+.input-wrap label {
+    display: block;
+    font-size: 11px;
+    color: #8899a6;
+    margin-bottom: 6px;
+}
+
+input[type="text"] {
+    width: 100%;
+    background: #020b17;
+    border: 1px solid #1a3a60;
+    color: #00ff66;
+    font-family: inherit;
+    font-size: 20px;
+    font-weight: bold;
+    padding: 10px;
+    text-transform: uppercase;
+    text-align: center;
+    outline: none;
+}
+
+input[type="text"]:focus {
+    border-color: #00ff66;
+    box-shadow: 0 0 10px rgba(0, 255, 102, 0.3);
+}
+
+.glow-btn {
+    width: 100%;
+    background: #092c42;
+    border: 1px solid #00ff66;
+    color: #00ff66;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: bold;
+    padding: 12px 0;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.glow-btn:hover {
+    background: #00ff66;
+    color: #02060e;
+    box-shadow: 0 0 15px rgba(0, 255, 102, 0.5);
+}
+
+.subtle-btn {
+    background: #0d223a;
+    border: 1px solid #2980b9;
+    color: #70b4e0;
+    padding: 10px 16px;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.lobby-action-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.lobby-list-container {
+    text-align: left;
+    margin-bottom: 16px;
+}
+
+.lobby-list-title {
+    font-size: 11px;
+    color: #647d96;
+    margin-bottom: 6px;
+}
+
+.lobby-list {
+    max-height: 200px;
+    overflow-y: auto;
+    background: #020b17;
+    border: 1px solid #1a3a60;
+    padding: 8px;
+}
+
+.lobby-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid #0e2238;
+}
+
+.lobby-item:last-child {
+    border-bottom: none;
+}
+
+.empty-notice {
+    padding: 16px;
+    text-align: center;
+    color: #4b6279;
+    font-size: 11px;
+}
+
+.join-btn {
+    background: #16a085;
+    border: 1px solid #00ff66;
+    color: #fff;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: bold;
+    padding: 4px 12px;
+    cursor: pointer;
+}
+
+.waiting-notice {
+    margin-top: 16px;
+    color: #f1c40f;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid #1a3a60;
+    border-top-color: #f1c40f;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* TOP HUD */
+#game-hud {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+    z-index: 100;
+}
+
+.hud-panel {
+    background: rgba(4, 15, 30, 0.92);
+    border: 2px solid #1a3a60;
+    padding: 10px 14px;
+    border-radius: 4px;
+    pointer-events: auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+}
+
+.hud-title {
+    font-weight: bold;
+    color: #4ba3e3;
+    font-size: 11px;
+    margin-bottom: 6px;
+    letter-spacing: 1px;
+}
+
+#scout-status {
+    font-size: 10px;
+    margin-bottom: 4px;
+}
+
+#scout-progress-bar {
+    width: 180px;
+    height: 5px;
+    background: #0d1e33;
+    border: 1px solid #1a3a60;
+    margin-bottom: 8px;
+}
+
+#progress-fill {
+    width: 0%;
+    height: 100%;
+    background: #00ff66;
+}
+
+.hud-btn {
+    width: 100%;
+    background: #0d223a;
+    border: 1px solid #2980b9;
+    color: #70b4e0;
+    padding: 4px 0;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.hud-btn.active {
+    background: #16a085;
+    border-color: #00ff66;
+    color: #ffffff;
+}
+
+/* CENTER SCORE TRACKER */
+.center-panel {
+    min-width: 380px;
+    text-align: center;
+}
+
+.score-display {
+    display: flex;
+    justify-content: space-around;
+    font-size: 11px;
+    font-weight: bold;
+    margin-bottom: 6px;
+}
+
+.score-tag.p1 { color: #00ff66; }
+.score-tag.p2 { color: #e74c3c; }
+.score-divider { color: #4ba3e3; }
+
+#score-bar-track {
+    width: 100%;
+    height: 8px;
+    background: #081b2e;
+    border: 1px solid #1a3a60;
+    display: flex;
+    position: relative;
+    overflow: hidden;
+}
+
+#score-bar-p1 {
+    width: 0%;
+    height: 100%;
+    background: #00ff66;
+    transition: width 0.3s;
+}
+
+#score-bar-p2 {
+    width: 0%;
+    height: 100%;
+    background: #e74c3c;
+    transition: width 0.3s;
+}
+
+/* RIGHT SEND PAYLOAD PANEL */
+.payload-sub {
+    font-size: 9px;
+    color: #647d96;
+    margin-bottom: 3px;
+}
+
+.btn-group {
+    display: flex;
+    gap: 4px;
+}
+
+.pct-btn, .gold-pct-btn {
+    background: #0d1e33;
+    border: 1px solid #1a3a60;
+    color: #8899a6;
+    padding: 3px 6px;
+    font-family: inherit;
+    font-size: 10px;
+    cursor: pointer;
+}
+
+.pct-btn.active {
+    background: #00ff66;
+    color: #030811;
+    font-weight: bold;
+}
+
+.gold-pct-btn.active {
+    background: #f1c40f;
+    color: #030811;
+    font-weight: bold;
+}
+
+/* DOCKYARD INSPECTOR DRAWER */
+.side-drawer {
+    position: absolute;
+    top: 90px;
+    right: 16px;
+    width: 290px;
+    background: rgba(4, 15, 30, 0.95);
+    border: 2px solid #1a3a60;
+    border-radius: 4px;
+    padding: 14px;
+    z-index: 100;
+}
+
+.drawer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #1a3a60;
+    padding-bottom: 6px;
+    margin-bottom: 10px;
+}
+
+#inspector-name {
+    font-size: 12px;
+    font-weight: bold;
+    color: #00ff66;
+}
+
+.close-btn {
+    background: transparent;
+    border: none;
+    color: #8899a6;
+    font-size: 18px;
+    cursor: pointer;
+}
+
+.drawer-stats {
+    font-size: 11px;
+    margin-bottom: 14px;
+    line-height: 1.6;
+}
+
+.stat-row {
+    display: flex;
+    justify-content: space-between;
+}
+
+.upgrade-section {
+    border-top: 1px solid #1a3a60;
+    padding-top: 10px;
+}
+
+.upgrade-title {
+    font-size: 10px;
+    color: #4ba3e3;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+
+.upgrade-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #020b17;
+    border: 1px solid #0e2238;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+}
+
+.upgrade-name {
+    font-size: 10px;
+    font-weight: bold;
+}
+
+.upgrade-cost {
+    font-size: 9px;
+    color: #f1c40f;
+}
+
+.upgrade-btn {
+    background: #0d223a;
+    border: 1px solid #2980b9;
+    color: #70b4e0;
+    padding: 4px 8px;
+    font-family: inherit;
+    font-size: 9px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.upgrade-btn:hover {
+    background: #2980b9;
+    color: #fff;
+}
+
+.hidden {
+    display: none !important;
+}
